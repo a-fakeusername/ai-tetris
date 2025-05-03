@@ -4,23 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Flask Textbox Example</title>
-    <style>
-        /* Optional: Some basic styling */
-        body {
-            font-family: sans-serif;
-            padding: 20px;
-        }
-        label {
-            display: block;
-            margin-bottom: 5px;
-        }
-        input[type="text"] {
-            padding: 8px;
-            width: 300px;
-            border: 1px solid #ccc;
-            background-color: #f0f0f0; /* Indicate it's read-only */
-        }
-    </style>
+    <link rel="stylesheet" href="{{url_for('static', filename='style.css')}}">
 </head>
 <body>
 
