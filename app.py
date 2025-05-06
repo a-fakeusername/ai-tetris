@@ -5,6 +5,8 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 import os
 
+from queue import Queue
+
 # --- Flask App Setup ---
 app = Flask(__name__)
 # In a real app, use a secret key from environment variables
@@ -91,19 +93,21 @@ def create_empty_board():
     """Creates a new empty game board."""
     return [[EMPTY_CELL for _ in range(BOARD_WIDTH)] for _ in range(BOARD_HEIGHT)]
 
-def count_empty_rows(piece):
-    """Counts the number of empty rows above the piece."""
-    empty_rows = 0
-    for row in piece:
-        if all(cell == EMPTY_CELL for cell in row):
-            empty_rows += 1
-        else:
-            break
-    return empty_rows
+def generate_7bag():
+    """Generates a random sequence of tetrominoes in a 7-bag format."""
+    pieces = list(TETROMINOES.keys())
+    random.shuffle(pieces)
+    return pieces
 
-def create_new_piece():
-    """Selects a random tetromino and initializes its state."""
-    piece_type = random.choice(list(TETROMINOES.keys()))
+def create_new_piece(game):
+    """Creates the next piece and sets its starting position."""
+    if (game.piece_queue.empty()):
+        # Generate a new 7-bag if the queue is empty
+        new_pieces = generate_7bag()
+        for piece in new_pieces:
+            game.piece_queue.put(piece)
+    
+    piece_type = game.piece_queue.get()
     piece_data = TETROMINOES[piece_type]
     return {
         'type': piece_type,
@@ -112,7 +116,7 @@ def create_new_piece():
         'shape': piece_data['rotations'][0], # Current shape based on rotation
         'color': piece_data['color'],
         'x': BOARD_WIDTH // 2 - len(piece_data['rotations'][0][0]) // 2, # Start roughly centered
-        'y': -count_empty_rows(piece_data['rotations'][0]) # Start at the top
+        'y':0 # Start at the top
     }
 
 def is_valid_position(board, piece, offset_x=0, offset_y=0, rotation_offset=0):
@@ -174,12 +178,13 @@ class TetrisGame:
     def __init__(self, sid):
         self.sid = sid
         self.board = create_empty_board()
-        self.current_piece = create_new_piece()
         self.score = 0
         self.is_game_over = False
         self.game_active = True # Flag to stop the loop
         self.fall_delay = calculate_speed(0)
         self.lines_cleared = 0
+        self.piece_queue = Queue()
+        self.current_piece = create_new_piece(self)
 
     def get_state(self):
         """Returns the current game state dictionary."""
@@ -236,7 +241,7 @@ class TetrisGame:
                 self.lines_cleared += lines_cleared # Track total lines cleared
 
             # Spawn a new piece
-            self.current_piece = create_new_piece()
+            self.current_piece = create_new_piece(self)
 
             # Check for game over (new piece overlaps immediately)
             if not is_valid_position(self.board, self.current_piece):
@@ -254,7 +259,7 @@ def game_loop_task(sid):
     while True:
         # Retrieve game state and lock safely
         with state_locks[sid]:
-            game = game_states.get(sid)
+            game: TetrisGame = game_states.get(sid)
             if not game or not game.game_active:
                 print(f"Stopping game loop for SID: {sid} (Game not active or not found)")
                 break # Exit loop if game ended or state removed
@@ -353,7 +358,7 @@ def handle_player_action(data):
     # Get lock and game state
     if sid in state_locks:
         with state_locks[sid]:
-            game = game_states.get(sid)
+            game: TetrisGame = game_states.get(sid)
             if game and not game.is_game_over and game.current_piece:
                 # print(f"Received action '{action}' from SID: {sid}") # Debug
                 if action == 'move_left':

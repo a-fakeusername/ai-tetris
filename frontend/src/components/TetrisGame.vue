@@ -29,6 +29,9 @@
   // --- Configuration ---
   const BACKEND_URL = 'http://localhost:5000'; // Your Flask server URL
   const BLOCK_SIZE = 30; // Size of each block in pixels
+  const DAS = 100; // Delay before auto repeat (in ms)
+  const ARR = 10; // Auto Repeat Rate (in ms)
+  const SDF = 50; // Soft Drop Speed (in ms)
   
   // --- Reactive State ---
   const gameCanvas = ref(null); // Template ref for the canvas
@@ -36,10 +39,18 @@
   const isConnected = ref(false);
   const board = ref([]); // 2D array representing the game board
   const currentPiece = ref(null); // Info about the falling piece
+  const pieceQueue = ref([]); // Queue of upcoming pieces
   const score = ref(0);
   const isGameOver = ref(false);
   const boardWidth = ref(10); // Default, will be updated from backend
   const boardHeight = ref(20); // Default, will be updated from backend
+
+  const activeEvents = ref(new Set()); // Track active events for key handling
+  const eventCount = ref({ // Stores counters, makes sure that release before timeout stops DAS
+    'move_left': 0,
+    'move_right': 0
+  });
+  const eventIntervals = ref({}); // Stores intervals which are deleted upon keyup
   
   let socket = null;
   
@@ -160,6 +171,7 @@
       isGameOver.value = gameState.is_game_over || false;
       boardWidth.value = gameState.board_width || boardWidth.value;
       boardHeight.value = gameState.board_height || boardHeight.value;
+      pieceQueue.value = gameState.piece_queue || [];
   
       // Trigger redraw only after state is updated
        requestAnimationFrame(drawGame);
@@ -174,15 +186,11 @@
         console.warn('Cannot send action - Socket not connected or game over.');
     }
   }
-  
-  // --- Keyboard Input Handling ---
-  function handleKeydown(event) {
-    if (!isConnected.value || isGameOver.value) {
-      return; // Don't handle input if not connected or game is over
-    }
-  
+
+  // Takes in event.key and gets respective action
+  function getActionFromKey(key) {
     let action = null;
-    switch (event.key) {
+    switch (key) {
       case 'ArrowLeft':
         action = 'move_left';
         break;
@@ -197,27 +205,95 @@
         action = 'rotate';
         break;
       case 'z':
-        action = 'rotate_reverse'; // Optional: Reverse rotation
+        action = 'rotate_reverse';
         break;
       case 'a':
-        action = 'rotate_180'; // Optional: 180-degree rotation
+        action = 'rotate_180';
         break;
       case 'c':
-        action = 'hold'; // Optional: Hold piece
+        action = 'hold';
         break;
-      case ' ': // Space bar
+      case ' ':
         action = 'hard_drop';
         break;
-      default:
-        return; // Ignore other keys
     }
-  
-    if (action) {
-        event.preventDefault(); // Prevent default browser action (e.g., scrolling)
-        sendAction(action);
+    return action;
+  }
+
+  function stopInterval(action) {
+    if (activeEvents.value.has(action)) {
+      activeEvents.value.delete(action);
+    }
+    if (eventIntervals.value[action]) {
+      // console.log('remove das');
+      clearInterval(eventIntervals.value[action]);
+      delete eventIntervals.value[action];
     }
   }
   
+  // --- Keyboard Input Handling ---
+  function handleKeydown(event) {
+    if (!isConnected.value || isGameOver.value) {
+      return; // Don't handle input if not connected or game is over
+    }
+
+    if (event.repeat) {
+      return; // Ignore repeated key presses
+    }
+  
+    const action = getActionFromKey(event.key); // Map keyCode to action
+    if (action == null) {
+      return; // Ignore if no action is mapped to the key
+    }
+  
+    if (action) {
+      event.preventDefault(); // Prevent default browser action (e.g., scrolling)
+      // Handle DAS (Delayed Auto Shift)
+      if (action == 'move_left' || action == 'move_right') {
+        if (activeEvents.value.has(action)) {
+          return; // Ignore if already active
+        }
+        
+        const otherAction = action == 'move_left' ? 'move_right' : 'move_left';
+        stopInterval(otherAction);
+
+        const counter = eventCount.value[action]++;
+        activeEvents.value.add(action); // Add to active events
+        setTimeout(() => {
+          if (activeEvents.value.has(action) && !activeEvents.value.has(otherAction) && eventCount.value[action] == counter + 1) {
+            eventIntervals.value[action] = setInterval(() => {
+              sendAction(action);
+            }, 0);
+          }
+        }, DAS);
+        console.log("das");
+
+      } else if (action == 'move_down') {
+        if (activeEvents.value.has(action)) {
+          return;
+        }
+
+        activeEvents.value.add(action); // Add to active events
+        eventIntervals.value[action] = setInterval(() => {
+          sendAction(action);
+        }, SDF);
+        console.log("soft drop");
+      }
+      sendAction(action);
+    }
+  }
+  
+  // Used to cancel DAS/Soft Drop
+  function handleKeyup(event) {
+    if (!isConnected.value || isGameOver.value) {
+      return; // Don't handle input if not connected or game is over
+    }
+    let action = getActionFromKey(event.key);
+    if (action == 'move_left' || action == 'move_right' || action == 'move_down') {
+      stopInterval(action);
+    }
+  }
+
   // --- Lifecycle Hooks ---
   onMounted(() => {
     if (gameCanvas.value) {
@@ -229,72 +305,21 @@
       // ctx.value.textAlign = 'center';
       // ctx.value.fillText('Connecting...', canvasWidth.value / 2, canvasHeight.value / 2);
     } else {
-        console.error("Canvas element not found!");
+      console.error("Canvas element not found!");
     }
   
     setupWebSocket();
     window.addEventListener('keydown', handleKeydown);
+    window.addEventListener('keyup', handleKeyup);
   });
   
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeydown);
+    window.removeEventListener('keyup', handleKeyup);
     if (socket) {
       console.log('Disconnecting socket...');
       socket.disconnect();
     }
   });
   
-  // Optional: Watch canvas size changes to redraw if needed,
-  // though computed properties should handle this via :width/:height bindings.
-  // watch([canvasWidth, canvasHeight], () => {
-  //   if (ctx.value) {
-  //       console.log("Canvas size changed, redrawing...");
-  //       requestAnimationFrame(drawGame); // Redraw if dimensions change
-  //   }
-  // });
-  
 </script>
-  
-<style scoped>
-  .tetris-container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    font-family: sans-serif;
-  }
-  
-  .game-board {
-    border: 3px solid #eee;
-    background-color: #222; /* Fallback background */
-    margin-top: 10px;
-    /* Prevent blurry rendering on some displays */
-    image-rendering: -moz-crisp-edges;
-    image-rendering: -webkit-crisp-edges;
-    image-rendering: pixelated;
-    image-rendering: crisp-edges;
-  }
-  
-  .game-over-text {
-    color: red;
-    font-size: 2em;
-    font-weight: bold;
-    margin-top: 10px;
-  }
-  
-  .instructions {
-    margin-top: 20px;
-    text-align: left;
-    border: 1px solid #ccc;
-    padding: 10px;
-    border-radius: 5px;
-     background-color: #f9f9f9;
-  }
-  
-  .instructions ul {
-      list-style: none;
-      padding-left: 0;
-  }
-  .instructions li {
-      margin-bottom: 5px;
-  }
-</style>

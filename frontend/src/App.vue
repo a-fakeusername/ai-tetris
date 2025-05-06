@@ -5,6 +5,6 @@
 </template>
 
 <script setup>
-import TetrisGame from './components/TetrisGame.vue';
+  import TetrisGame from './components/TetrisGame.vue';
 </script>
 

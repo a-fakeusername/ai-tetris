@@ -13,3 +13,45 @@ body {
   border-radius: 8px;
   box-shadow: 0 4px 8px rgba(0,0,0,0.1);
 }
+
+.tetris-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: sans-serif;
+}
+
+.game-board {
+  border: 3px solid #eee;
+  background-color: #222; /* Fallback background */
+  margin-top: 10px;
+  /* Prevent blurry rendering on some displays */
+  image-rendering: -moz-crisp-edges;
+  image-rendering: -webkit-crisp-edges;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.game-over-text {
+  color: red;
+  font-size: 2em;
+  font-weight: bold;
+  margin-top: 10px;
+}
+
+.instructions {
+  margin-top: 20px;
+  text-align: left;
+  border: 1px solid #ccc;
+  padding: 10px;
+  border-radius: 5px;
+   background-color: #f9f9f9;
+}
+
+.instructions ul {
+    list-style: none;
+    padding-left: 0;
+}
+.instructions li {
+    margin-bottom: 5px;
+}
