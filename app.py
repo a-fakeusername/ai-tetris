@@ -231,7 +231,7 @@ class TetrisGame:
             # Clear completed lines
             self.board, lines_cleared = clear_lines(self.board)
             if lines_cleared > 0:
-                self.score += LINE_SCORES.get(lines_cleared, 0) * (self.score // 200 + 1) # Add level bonus
+                self.score += LINE_SCORES.get(lines_cleared, 0) * (self.lines_cleared // 10 + 1) # Add level bonus
                 self.fall_delay = calculate_speed(self.lines_cleared // 10) # Update speed
                 self.lines_cleared += lines_cleared # Track total lines cleared
 
@@ -244,7 +244,8 @@ class TetrisGame:
                 self.game_active = False # Stop the loop
                 self.current_piece = None # No more falling piece
                 print(f"Game Over for SID: {self.sid}. Final Score: {self.score}")
-            return False # Piece landed
+                return False
+            return True
 
 # --- Game Loop Task ---
 def game_loop_task(sid):
@@ -362,19 +363,22 @@ def handle_player_action(data):
                 elif action == 'move_down':
                     # Move down attempts to step, potentially freezing piece
                     updated = game.step() # Use step logic for consistency
+                    game.score += 1
                 elif action == 'rotate':
                     updated = game.rotate()
                 elif action == 'hard_drop':
+                    amt = 0
                     while game.move(0, 1):
-                        pass # Keep moving down until it fails
+                        amt += 1
                     updated = game.step() # Final step to freeze and check lines/game over
+                    game.score += amt * 2
                 elif action == 'rotate_reverse':
                     updated = game.rotate(3)
                 elif action == 'rotate_180':
                     updated = game.rotate(2)
 
                 # If the action resulted in a state change, emit update
-                if updated:
+                if updated or game.is_game_over:
                     current_state = game.get_state()
                     # Emit update outside the lock? No, emit immediately after valid action
                     socketio.emit('game_update', current_state, room=sid)

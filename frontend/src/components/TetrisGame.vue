@@ -1,28 +1,28 @@
 <template>
-    <div class="tetris-container">
-      <h2>Vue Tetris Client</h2>
-      <p>Status: {{ connectionStatus }}</p>
-      <canvas
-        ref="gameCanvas"
-        :width="canvasWidth"
-        :height="canvasHeight"
-        class="game-board"
-      ></canvas>
-      <p v-if="score !== null">Score: {{ score }}</p>
-      <p v-if="isGameOver" class="game-over-text">GAME OVER</p>
-      <div class="instructions">
-        <p>Use Arrow Keys to Play:</p>
-        <ul>
-          <li>&larr; : Move Left</li>
-          <li>&rarr; : Move Right</li>
-          <li>&darr; : Move Down</li>
-          <li>&uarr; : Rotate</li>
-          </ul>
-      </div>
+  <div class="tetris-container">
+    <h2>Vue Tetris Client</h2>
+    <p>Status: {{ connectionStatus }}</p>
+    <canvas
+      ref="gameCanvas"
+      :width="canvasWidth"
+      :height="canvasHeight"
+      class="game-board"
+    ></canvas>
+    <p v-if="score !== null">Score: {{ score }}</p>
+    <p v-if="isGameOver" class="game-over-text">GAME OVER</p>
+    <div class="instructions">
+      <p>Use Arrow Keys to Play:</p>
+      <ul>
+        <li>&larr; : Move Left</li>
+        <li>&rarr; : Move Right</li>
+        <li>&darr; : Move Down</li>
+        <li>&uarr; : Rotate</li>
+        </ul>
     </div>
-  </template>
+  </div>
+</template>
   
-  <script setup>
+<script setup>
   import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
   import { io } from 'socket.io-client';
   
@@ -253,9 +253,9 @@
   //   }
   // });
   
-  </script>
+</script>
   
-  <style scoped>
+<style scoped>
   .tetris-container {
     display: flex;
     flex-direction: column;
@@ -294,7 +294,7 @@
       list-style: none;
       padding-left: 0;
   }
-   .instructions li {
-       margin-bottom: 5px;
-   }
-  </style>
+  .instructions li {
+      margin-bottom: 5px;
+  }
+</style>
