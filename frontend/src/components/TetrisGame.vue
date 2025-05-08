@@ -218,9 +218,6 @@
       case 'a':
         action = 'rotate_180';
         break;
-      case 'c':
-        action = 'hold';
-        break;
       case ' ':
         action = 'hard_drop';
         break;

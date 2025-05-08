@@ -21,6 +21,7 @@ BOARD_HEIGHT = 20
 EMPTY_CELL = 0
 # Score multiplier per line cleared at once
 LINE_SCORES = {1: 40, 2: 100, 3: 300, 4: 1200}
+POSSIBLE_ACTIONS = {'move_left', 'move_right', 'move_down', 'rotate', 'hard_drop', 'rotate_reverse', 'rotate_180'}
 
 # --- Tetromino Shapes ---
 # Define shapes as matrices (0 = empty, 1 = block)
@@ -252,6 +253,51 @@ class TetrisGame:
                 return False
             return True
 
+    def do_action(self, action: str) -> bool:
+        if action not in POSSIBLE_ACTIONS:
+            print(f"Invalid action '{action}' received from SID: {self.sid}")
+            return False
+
+        if action == 'restart':
+            # Restart the game
+            self.board = create_empty_board()
+            self.score = 0
+            self.is_game_over = False
+            self.game_active = True # Flag to stop the loop
+            self.fall_delay = calculate_speed(0)
+            self.lines_cleared = 0
+            self.piece_queue = Queue()
+            self.current_piece = create_new_piece(self)
+
+            return True
+
+        updated = False
+
+        if not self.is_game_over and self.current_piece:
+            # print(f"Received action '{action}' from SID: {sid}") # Debug
+            if action == 'move_left':
+                updated = self.move(-1, 0)
+            elif action == 'move_right':
+                updated = self.move(1, 0)
+            elif action == 'move_down':
+                # Move down attempts to step, potentially freezing piece
+                updated = self.step() # Use step logic for consistency
+                self.score += 1
+            elif action == 'rotate':
+                updated = self.rotate()
+            elif action == 'hard_drop':
+                amt = 0
+                while self.move(0, 1):
+                    amt += 1
+                updated = self.step() # Final step to freeze and check lines/game over
+                self.score += amt * 2
+            elif action == 'rotate_reverse':
+                updated = self.rotate(3)
+            elif action == 'rotate_180':
+                updated = self.rotate(2)
+            updated = updated or self.is_game_over
+        return updated
+
 # --- Game Loop Task ---
 def game_loop_task(sid):
     """Background task that runs the game loop for a specific client."""
@@ -364,53 +410,9 @@ def handle_player_action(data):
             if not game:
                 print(f"Game state not found for SID: {sid}, ignoring action.")
                 return
-            if action == 'restart':
-                # Restart the game
-                game.board = create_empty_board()
-                game.score = 0
-                game.is_game_over = False
-                game.game_active = True # Flag to stop the loop
-                game.fall_delay = calculate_speed(0)
-                game.lines_cleared = 0
-                game.piece_queue = Queue()
-                game.current_piece = create_new_piece(game)
-                current_state = game.get_state()
-                socketio.emit('game_update', current_state, room=sid) # Emit initial state
-                return
-
-            if not game.is_game_over and game.current_piece:
-                # print(f"Received action '{action}' from SID: {sid}") # Debug
-                if action == 'move_left':
-                    updated = game.move(-1, 0)
-                elif action == 'move_right':
-                    updated = game.move(1, 0)
-                elif action == 'move_down':
-                    # Move down attempts to step, potentially freezing piece
-                    updated = game.step() # Use step logic for consistency
-                    game.score += 1
-                elif action == 'rotate':
-                    updated = game.rotate()
-                elif action == 'hard_drop':
-                    amt = 0
-                    while game.move(0, 1):
-                        amt += 1
-                    updated = game.step() # Final step to freeze and check lines/game over
-                    game.score += amt * 2
-                elif action == 'rotate_reverse':
-                    updated = game.rotate(3)
-                elif action == 'rotate_180':
-                    updated = game.rotate(2)
-
-                # If the action resulted in a state change, emit update
-                if updated or game.is_game_over:
-                    current_state = game.get_state()
-                    # Emit update outside the lock? No, emit immediately after valid action
-                    socketio.emit('game_update', current_state, room=sid)
-                # else:
-                    # print(f"Action '{action}' was invalid or had no effect for SID: {sid}")
-
-            # else:
-                # print(f"Action '{action}' ignored for SID: {sid} (Game Over or No Piece)")
+            updated = game.do_action(action)
+            if updated:
+                socketio.emit('game_update', game.get_state(), room=sid)
 
 
 # --- Main Execution ---
