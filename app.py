@@ -5,6 +5,11 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 import os
 
+import gymnasium as gym
+from stable_baselines3 import PPO
+import torch.nn as nn
+import numpy as np
+
 from queue import Queue
 
 # --- Flask App Setup ---
@@ -21,7 +26,7 @@ BOARD_HEIGHT = 20
 EMPTY_CELL = 0
 # Score multiplier per line cleared at once
 LINE_SCORES = {1: 40, 2: 100, 3: 300, 4: 1200}
-POSSIBLE_ACTIONS = {'move_left', 'move_right', 'move_down', 'rotate', 'hard_drop', 'rotate_reverse', 'rotate_180'}
+POSSIBLE_ACTIONS = ['move_left', 'move_right', 'move_down', 'rotate', 'hard_drop', 'rotate_reverse', 'rotate_180', 'no_op']
 
 # --- Tetromino Shapes ---
 # Define shapes as matrices (0 = empty, 1 = block)
@@ -175,9 +180,38 @@ def calculate_speed(level):
 
 # --- Game Logic Class (Optional but good for structure) ---
 # Alternatively, keep functions operating on the state dictionary directly
-class TetrisGame:
-    def __init__(self, sid):
+class TetrisGame(gym.Env):
+    def __init__(self, sid=0):
+        super().__init__()
         self.sid = sid
+        self.reset()
+        board_space = gym.spaces.MultiBinary((BOARD_HEIGHT, BOARD_WIDTH)) # Binary representation of the board
+        piece_space = gym.spaces.MultiBinary((BOARD_HEIGHT, BOARD_WIDTH)) # Binary representation of the piece
+        self.observation_space = gym.spaces.Dict({
+            'board': board_space,
+            'piece': piece_space
+        })
+        self.action_space = gym.spaces.Discrete(len(POSSIBLE_ACTIONS))
+
+    def _get_obs(self):
+        """Returns the current observation of the game."""
+        # Convert board and piece to binary representation
+        piece = self.current_piece if self.current_piece else None
+        board_obs = np.array([[1 if cell != EMPTY_CELL else 0 for cell in row] for row in self.board], dtype=np.int8)
+        piece_obs = np.array([[0 for cell in row] for row in self.board], dtype=np.int8)
+        if piece:
+            for r, row in enumerate(piece['shape']):
+                for c, cell in enumerate(row):
+                    if cell:
+                        piece_obs[piece['y'] + r][piece['x'] + c] = 1
+        return {
+            'board': board_obs,
+            'piece': piece_obs
+        }
+    
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed, options=options)
+        """Resets the game state."""
         self.board = create_empty_board()
         self.score = 0
         self.is_game_over = False
@@ -186,6 +220,11 @@ class TetrisGame:
         self.lines_cleared = 0
         self.piece_queue = Queue()
         self.current_piece = create_new_piece(self)
+
+        observation = self._get_obs()
+        info = self._get_info()
+
+        return observation, info
 
     def get_state(self):
         """Returns the current game state dictionary."""
@@ -206,6 +245,13 @@ class TetrisGame:
             # Optional: Add next_piece preview
         }
 
+    def _get_info(self):
+        """Returns additional game info."""
+        return {
+            'score': self.score,
+            'lines_cleared': self.lines_cleared
+        }
+
     def move(self, dx, dy):
         """Attempts to move the current piece."""
         if self.current_piece and is_valid_position(self.board, self.current_piece, offset_x=dx, offset_y=dy):
@@ -222,7 +268,7 @@ class TetrisGame:
             return True
         return False
 
-    def step(self):
+    def game_step(self):
         """Advances the game by one tick."""
         if self.is_game_over or not self.current_piece:
             return False # Game already ended or no piece
@@ -253,22 +299,36 @@ class TetrisGame:
                 return False
             return True
 
-    def do_action(self, action: str) -> bool:
-        if action not in POSSIBLE_ACTIONS:
-            print(f"Invalid action '{action}' received from SID: {self.sid}")
-            return False
+    def step(self, action):
+        observation = self._get_obs()
+        reward = 0
+        terminated = self.is_game_over
+        truncated = False # Not used in this game
+        info = self._get_info()
 
+        old_score = self.score
+        old_lines = self.lines_cleared
+
+        self.do_action(POSSIBLE_ACTIONS[action]) # Perform the action
+        self.game_step()
+
+        if self.is_game_over:
+            reward = -1000000 # Large negative reward for game over
+        else:
+            reward += (self.score - old_score) // 10 # Reward for score increase
+            reward += (self.lines_cleared - old_lines) * 10 # Reward for lines cleared
+            reward += 1 # Small reward for each tick survived
+            # If needed, add board heuristics
+
+        socketio.emit('game_update', self.get_state(), room=self.sid) # Emit state update
+
+        return observation, reward, terminated, truncated, info
+        
+
+    def do_action(self, action: str) -> bool:
         if action == 'restart':
             # Restart the game
-            self.board = create_empty_board()
-            self.score = 0
-            self.is_game_over = False
-            self.game_active = True # Flag to stop the loop
-            self.fall_delay = calculate_speed(0)
-            self.lines_cleared = 0
-            self.piece_queue = Queue()
-            self.current_piece = create_new_piece(self)
-
+            self.reset()
             return True
 
         updated = False
@@ -281,7 +341,7 @@ class TetrisGame:
                 updated = self.move(1, 0)
             elif action == 'move_down':
                 # Move down attempts to step, potentially freezing piece
-                updated = self.step() # Use step logic for consistency
+                updated = self.game_step() # Use step logic for consistency
                 self.score += 1
             elif action == 'rotate':
                 updated = self.rotate()
@@ -289,7 +349,7 @@ class TetrisGame:
                 amt = 0
                 while self.move(0, 1):
                     amt += 1
-                updated = self.step() # Final step to freeze and check lines/game over
+                updated = self.game_step() # Final step to freeze and check lines/game over
                 self.score += amt * 2
             elif action == 'rotate_reverse':
                 updated = self.rotate(3)
@@ -297,6 +357,24 @@ class TetrisGame:
                 updated = self.rotate(2)
             updated = updated or self.is_game_over
         return updated
+    
+    def print(self):
+        obs_data = self._get_obs()
+        print("Board State:")
+        for row in obs_data["board"]:
+            print("".join(['#' if cell == 1 else '.' for cell in row]))
+        
+        print("\nCurrent Piece:")
+        for row in obs_data["piece"]:
+            print("".join(['#' if cell == 1 else '.' for cell in row]))
+        print("-" * 20)
+
+    def close(self):
+        """Cleans up the game state."""
+        self.game_active = False
+        self.is_game_over = True
+        self.current_piece = None # No more falling piece
+        self.board = None # Clear board reference
 
 # --- Game Loop Task ---
 def game_loop_task(sid):
@@ -311,7 +389,7 @@ def game_loop_task(sid):
                 break # Exit loop if game ended or state removed
 
             # --- Perform Game Step ---
-            game.step()
+            game.game_step()
             current_state = game.get_state()
             fall_delay = game.fall_delay # Get current delay
 
@@ -420,3 +498,44 @@ if __name__ == '__main__':
     print("Starting Flask-SocketIO server...")
     # Use host='0.0.0.0' to make it accessible on your network
     socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+
+
+    env = TetrisGame()
+
+
+    # Uncomment the following lines to test the environment directly
+    '''
+    # print(env.observation_space)
+    # print(env.observation_space.sample()) # Example of a random sample from the space
+
+    # obs, info = env.reset()
+    # print("\nInitial Observation:")
+    # env.print() # Using our basic render
+
+    # # Simulate a few steps
+    # for i in range(5):
+    #     action = env.action_space.sample() # Random action
+    #     print(f"Step {i+1}, Action: {action}")
+    #     obs, reward, terminated, truncated, info = env.step(action)
+    #     env.print()
+    #     if terminated or truncated:
+    #         print("Game Over or Truncated!")
+    #         break
+    '''
+
+
+    # policy_kwargs = dict(net_arch=[dict(pi=[128, 128], vf=[128, 128])], activation_fn=nn.ReLU)
+    # model = PPO('MlpPolicy', env, policy_kwargs=policy_kwargs, verbose=1, tensorboard_log="./ppo_tetris_tensorboard/")
+
+    # Train the model
+    # model.learn(total_timesteps=50000)
+
+    # Save the model
+    # model.save("ppo_tetris_custom_net")
+
+    # To load later:
+    # loaded_model = PPO.load("ppo_tetris_custom_net", env=env)
+
+
+    env.close()
+    
