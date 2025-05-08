@@ -10,6 +10,7 @@
     ></canvas>
     <p v-if="score !== null">Score: {{ score }}</p>
     <p v-if="isGameOver" class="game-over-text">GAME OVER</p>
+    <button @click="sendAction('restart')">Restart</button>
     <div class="instructions">
       <p>Use Arrow Keys to Play:</p>
       <ul>
@@ -179,11 +180,18 @@
   }
   
   function sendAction(action) {
-    if (socket && isConnected.value && !isGameOver.value) {
+    if (!socket || !isConnected.value) {
+      console.error('Socket not initialized!');
+      return;
+    }
+    if (!isGameOver.value) {
       // console.log('Sending action:', action); // Debugging
       socket.emit('player_action', { action });
+    } else if (action == 'restart') {
+      socket.emit('player_action', { action: 'restart' });
+      console.log("Restarting game...");
     } else {
-        console.warn('Cannot send action - Socket not connected or game over.');
+      console.warn('Invalid input on game over.');
     }
   }
 

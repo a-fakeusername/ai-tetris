@@ -275,8 +275,10 @@ def game_loop_task(sid):
 
         # Check again if game should continue before sleeping
         if not game.game_active:
-            print(f"Stopping game loop for SID: {sid} after emitting final state.")
-            break
+            print(f"Waiting game loop for SID: {sid} after emitting final state.")
+            while not game.game_active:
+                socketio.sleep(0.1) # Sleep briefly to avoid busy waiting
+            continue # Continue to next tick
 
         # Wait for the next tick
         socketio.sleep(fall_delay) # Use socketio.sleep for compatibility with async modes
@@ -343,7 +345,7 @@ def handle_disconnect():
         # Note: We don't explicitly kill the thread here,
         # it checks game.game_active to exit gracefully.
         print(f"Ensuring background task reference is cleared for SID: {sid}")
-        # del background_tasks[sid] # Task cleans itself up now
+        del background_tasks[sid] # Task cleans itself up now
 
 @socketio.on('player_action')
 def handle_player_action(data):
@@ -359,7 +361,24 @@ def handle_player_action(data):
     if sid in state_locks:
         with state_locks[sid]:
             game: TetrisGame = game_states.get(sid)
-            if game and not game.is_game_over and game.current_piece:
+            if not game:
+                print(f"Game state not found for SID: {sid}, ignoring action.")
+                return
+            if action == 'restart':
+                # Restart the game
+                game.board = create_empty_board()
+                game.score = 0
+                game.is_game_over = False
+                game.game_active = True # Flag to stop the loop
+                game.fall_delay = calculate_speed(0)
+                game.lines_cleared = 0
+                game.piece_queue = Queue()
+                game.current_piece = create_new_piece(game)
+                current_state = game.get_state()
+                socketio.emit('game_update', current_state, room=sid) # Emit initial state
+                return
+
+            if not game.is_game_over and game.current_piece:
                 # print(f"Received action '{action}' from SID: {sid}") # Debug
                 if action == 'move_left':
                     updated = game.move(-1, 0)
