@@ -172,3 +172,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+
+# Model stuff
+ppo_tetris_tensorboard/
+ppo_tetris_custom_net.zip
