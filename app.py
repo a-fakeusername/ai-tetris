@@ -4,13 +4,18 @@ from flask import Flask, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 import os
+import sys
 
 import gymnasium as gym
 from stable_baselines3 import PPO
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from stable_baselines3.common.policies import ActorCriticPolicy
 import torch
 import torch.nn as nn
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
 
 from queue import Queue
 
@@ -28,9 +33,11 @@ BOARD_HEIGHT = 20
 EMPTY_CELL = 0
 # Score multiplier per line cleared at once
 LINE_SCORES = {1: 40, 2: 100, 3: 300, 4: 1200}
-POSSIBLE_ACTIONS = ['move_left', 'move_right', 'move_down', 'rotate', 'hard_drop', 'rotate_reverse', 'rotate_180', 'no_op']
+POSSIBLE_ACTIONS = ['move_left', 'move_right', 'move_down', 'hard_drop', 'rotate', 'rotate_reverse', 'rotate_180', 'no_op']
+SIMULATION_DELAY = .1 # Delay in seconds for bot simulation
 
 SCORE_HISTORY = []
+REWARD_HISTORY = []
 
 # --- Tetromino Shapes ---
 # Define shapes as matrices (0 = empty, 1 = block)
@@ -188,26 +195,31 @@ class TetrisGame(gym.Env):
     def __init__(self, sid=0):
         super().__init__()
         self.sid = sid
+        self.mode = 'player'
         self.reset()
         board_space = gym.spaces.MultiBinary((BOARD_HEIGHT, BOARD_WIDTH)) # Binary representation of the board
-        piece_space = gym.spaces.MultiBinary((BOARD_HEIGHT, BOARD_WIDTH)) # Binary representation of the piece
+        piece_space = gym.spaces.Box(low=0, high=max(BOARD_WIDTH, BOARD_HEIGHT), shape=(8,), dtype=np.int8) # 4 pairs of coordinates (x, y)
+         # Store 4 pairs of (x, y)
         self.observation_space = gym.spaces.Dict({
             'board': board_space,
             'piece': piece_space
         })
         self.action_space = gym.spaces.Discrete(len(POSSIBLE_ACTIONS))
+        self.model = PPO.load("ppo_tetris_custom_net", env=self)
 
     def _get_obs(self):
         """Returns the current observation of the game."""
         # Convert board and piece to binary representation
         piece = self.current_piece if self.current_piece else None
         board_obs = np.array([[1 if cell != EMPTY_CELL else 0 for cell in row] for row in self.board], dtype=np.int8)
-        piece_obs = np.array([[0 for cell in row] for row in self.board], dtype=np.int8)
+        piece_obs = np.array([0] * 8, dtype=np.int8) # 4 pairs of coordinates (x, y) for piece
         if piece:
-            for r, row in enumerate(piece['shape']):
-                for c, cell in enumerate(row):
+            counter = 0
+            for i, row in enumerate(piece['shape']):
+                for j, cell in enumerate(row):
                     if cell:
-                        piece_obs[piece['y'] + r][piece['x'] + c] = 1
+                        piece_obs[2 * counter] = j + piece['x']
+                        piece_obs[2 * counter + 1] = i + piece['y']
         return {
             'board': board_obs,
             'piece': piece_obs
@@ -218,6 +230,7 @@ class TetrisGame(gym.Env):
         """Resets the game state."""
         self.board = create_empty_board()
         self.score = 0
+        self.total_reward = 0
         self.is_game_over = False
         self.game_active = True # Flag to stop the loop
         self.fall_delay = calculate_speed(0)
@@ -301,9 +314,43 @@ class TetrisGame(gym.Env):
                 self.current_piece = None # No more falling piece
                 # print(f"Game Over for SID: {self.sid}. Final Score: {self.score}")
                 SCORE_HISTORY.append(self.score) # Store score history
+                REWARD_HISTORY.append(self.total_reward) # Store reward history
                 return False
             return True
 
+    # Board heuristics can be added here
+    def get_board_reward(self):
+        reward = 0
+
+        # Negative reward for holes, scales with how buried they are
+        for c in range(BOARD_WIDTH):
+            top = -1
+            for r in range(BOARD_HEIGHT):
+                if self.board[r][c] == EMPTY_CELL:
+                    if top != -1:
+                        reward -= (r - top) / 10
+                else:
+                    if top == -1:
+                        top = r
+
+        # Negative reward for too many taken cells
+        taken_cells = sum(1 for row in self.board for cell in row if cell != EMPTY_CELL)
+        if taken_cells > .4 * (BOARD_WIDTH * BOARD_HEIGHT):
+            reward -= (taken_cells / (BOARD_WIDTH * BOARD_HEIGHT) - .4)
+
+        # Negative reward for high columns in middle
+        for c in range(1, BOARD_WIDTH - 1):
+            height = 0
+            for r in range(BOARD_HEIGHT):
+                if self.board[r][c] != EMPTY_CELL:
+                    height = BOARD_HEIGHT - r
+                    break
+            if height > .6 * BOARD_HEIGHT:
+                reward -= (height / BOARD_HEIGHT) / 10
+
+        return reward
+
+    # Function that the model calls to train
     def step(self, action):
         observation = self._get_obs()
         reward = 0
@@ -318,12 +365,14 @@ class TetrisGame(gym.Env):
         self.game_step()
 
         if self.is_game_over:
-            reward = -1000000 # Large negative reward for game over
+            reward = -10 # Large negative reward for game over
         else:
-            reward += (self.score - old_score) / 10 # Reward for score increase
-            reward += (self.lines_cleared - old_lines) * 10 # Reward for lines cleared
-            reward += .1 # Small reward for each tick survived
-            # If needed, add board heuristics
+            reward += max((self.score - old_score) / 1000, 1)  # Reward for score increase
+            reward += (self.lines_cleared - old_lines) # Reward for lines cleared
+            reward += .01 # Small reward for each tick survived
+            reward += self.get_board_reward() # Add board heuristics
+
+        self.total_reward += reward
 
         socketio.emit('game_update', self.get_state(), room=self.sid) # Emit state update
 
@@ -365,14 +414,23 @@ class TetrisGame(gym.Env):
     
     def print(self):
         obs_data = self._get_obs()
+        piece = self.current_piece
         print("Board State:")
-        for row in obs_data["board"]:
-            print("".join(['#' if cell == 1 else '.' for cell in row]))
-        
-        print("\nCurrent Piece:")
-        for row in obs_data["piece"]:
-            print("".join(['#' if cell == 1 else '.' for cell in row]))
-        print("-" * 20)
+        for i, row in enumerate(obs_data["board"]):
+            row_str = ""
+            for j, cell in enumerate(row):
+                if piece['y'] <= i and piece['y'] + len(piece['shape']) > i and piece['x'] <= j and piece['x'] + len(piece['shape'][0]) > j:
+                    # Check if the cell is part of the current piece
+                    piece_row = i - piece['y']
+                    piece_col = j - piece['x']
+                    if piece['shape'][piece_row][piece_col] == 1:
+                        row_str += "%"
+                        continue
+                if cell == 1:
+                    row_str += "#"
+                else:
+                    row_str += "."
+            print(row_str)
 
     def close(self):
         """Cleans up the game state."""
@@ -393,6 +451,19 @@ def game_loop_task(sid):
                 print(f"Stopping game loop for SID: {sid} (Game not active or not found)")
                 break # Exit loop if game ended or state removed
 
+            # If bot, then perform action
+            if game.mode == 'bot':
+                if not game.model:
+                    print(f"Model not loaded for SID: {sid}, skipping action.")
+                    socketio.sleep(SIMULATION_DELAY)
+                    continue
+                # Get the current observation
+                obs = game._get_obs()
+                # Predict action using the model
+                action, _states = game.model.predict(obs, deterministic=True)
+                # Perform the action
+                game.do_action(POSSIBLE_ACTIONS[action])
+
             # --- Perform Game Step ---
             game.game_step()
             current_state = game.get_state()
@@ -408,9 +479,12 @@ def game_loop_task(sid):
             while not game.game_active:
                 socketio.sleep(0.1) # Sleep briefly to avoid busy waiting
             continue # Continue to next tick
-
-        # Wait for the next tick
-        socketio.sleep(fall_delay) # Use socketio.sleep for compatibility with async modes
+        
+        if game.mode == 'bot':
+            socketio.sleep(SIMULATION_DELAY)
+        else:
+            # Wait for the next tick
+            socketio.sleep(fall_delay) # Use socketio.sleep for compatibility with async modes
 
     print(f"Game loop task ended for SID: {sid}")
     # Clean up task reference
@@ -493,17 +567,175 @@ def handle_player_action(data):
             if not game:
                 print(f"Game state not found for SID: {sid}, ignoring action.")
                 return
+
+            if action == 'change_mode':
+                game.mode = 'player' if game.mode == 'bot' else 'bot'
+                print(f"Changed game mode for SID: {sid} to {game.mode}")
+                game.do_action('restart') # Restart game on mode change
+
+
             updated = game.do_action(action)
             if updated:
                 socketio.emit('game_update', game.get_state(), room=sid)
+
+# --- Custom Feature Extractor ---
+class CustomTetrisFeatureExtractor(BaseFeaturesExtractor):
+    """
+    Custom feature extractor for Tetris.
+    It uses a CNN for the board and an MLP for the piece coordinates.
+    The outputs are then concatenated.
+    """
+    def __init__(self, observation_space: gym.spaces.Dict, cnn_output_dim: int = 64, mlp_output_dim: int = 32):
+        super().__init__(observation_space, features_dim=cnn_output_dim + mlp_output_dim)
+
+        extractors = {}
+
+        # --- CNN for the board ---
+        # The board is (BOARD_HEIGHT, BOARD_WIDTH)
+        # We need to add a channel dimension for the CNN: (1, BOARD_HEIGHT, BOARD_WIDTH)
+        board_shape = observation_space["board"].shape
+        cnn_input_shape = (1, board_shape[0], board_shape[1]) # (channels, height, width)
+
+        # Define a simple CNN
+        # Kernel sizes and strides might need tuning based on BOARD_HEIGHT/WIDTH
+        # This example assumes BOARD_HEIGHT=20, BOARD_WIDTH=10
+        self.board_cnn = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=(3, 3), stride=1, padding=1), # Output: (16, 20, 10)
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=(3, 3), stride=1, padding=1), # Output: (32, 20, 10)
+            nn.ReLU(),
+            # Example: Reduce dimensionality a bit more if needed
+            nn.Conv2d(32, 64, kernel_size=(3,3), stride=(2,1), padding=1), # Output: (64, 10, 10)
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+
+        # Calculate the flattened size after CNN
+        # Pass a dummy tensor to determine the output shape
+        with torch.no_grad():
+            dummy_board_input = torch.as_tensor(observation_space["board"].sample()[None]).float()
+            # Add channel dimension: (batch_size, height, width) -> (batch_size, 1, height, width)
+            dummy_board_input = dummy_board_input.unsqueeze(1)
+            cnn_flattened_size = self.board_cnn(dummy_board_input).shape[1]
+
+        # Define a linear layer to get to the desired cnn_output_dim
+        self.cnn_linear_output = nn.Linear(cnn_flattened_size, cnn_output_dim)
+        extractors["board"] = self.board_cnn # Store the main CNN part
+
+        # --- MLP for piece coordinates ---
+        piece_shape = observation_space["piece"].shape
+        self.piece_mlp = nn.Sequential(
+            nn.Linear(piece_shape[0], 64), # Input is 8
+            nn.ReLU(),
+            nn.Linear(64, mlp_output_dim),
+            nn.ReLU()
+        )
+        extractors["piece"] = self.piece_mlp # Store the MLP part
+
+        # Note: SB3's MultiInputPolicy will use these extractors.
+        # This custom class is more about defining the *structure* of these extractors
+        # and ensuring the final features_dim is correct.
+        # The actual processing and concatenation if not using SB3's default CombinedExtractor
+        # would happen in the forward method. Here, we are defining the sub-networks.
+
+        # For SB3, we just need to define the overall features_dim.
+        # The individual networks will be handled by SB3's processing of Dict spaces
+        # if we were to use this extractor directly in a policy that doesn't automatically
+        # handle Dict spaces with a CombinedExtractor.
+        # However, for MultiInputPolicy, it expects the sub-spaces.
+        # The key is that the `features_dim` of this *overall* extractor is correct.
+
+        # Let's redefine self.extractors to be used by SB3's MultiInputPolicy logic
+        # This is a bit of a workaround to fit the BaseFeaturesExtractor model
+        # when we want SB3's MultiInputPolicy to still handle the dict observation.
+        # The cleaner way is often to let MultiInputPolicy use its default extractors
+        # and customize those via policy_kwargs['features_extractor_kwargs'] if possible,
+        # or build a fully custom policy.
+        # For this specific request (CNN for board, MLP for coords),
+        # we'll define the networks and ensure the final combined dim is stated.
+
+        self._features_dim = cnn_output_dim + mlp_output_dim
+
+
+    def forward(self, observations: gym.spaces.Dict) -> torch.Tensor:
+        # This forward method would be used if this extractor was the *sole*
+        # feature extractor for a policy that doesn't inherently split Dict inputs.
+        # For MultiInputPolicy, SB3 handles the splitting.
+        # However, we need to implement it to show how features are combined.
+
+        board_obs = observations["board"]
+        piece_obs = observations["piece"]
+
+        # Board CNN processing
+        # Add channel dimension: (batch_size, height, width) -> (batch_size, 1, height, width)
+        board_features = board_obs.unsqueeze(1).float() # Ensure float and add channel
+        board_features = self.board_cnn(board_features)
+        board_features = self.cnn_linear_output(board_features)
+
+
+        # Piece MLP processing
+        # Ensure piece_obs is float for the MLP
+        piece_features = self.piece_mlp(piece_obs.float())
+
+        # Concatenate the features
+        concatenated_features = torch.cat((board_features, piece_features), dim=1)
+        return concatenated_features
+
+def display_score_history():
+    score_data = pd.Series(SCORE_HISTORY, dtype=int, name='Score')
+    reward_data = pd.Series(REWARD_HISTORY, dtype=float, name='Reward')
+    print(score_data.describe())
+    print(reward_data.describe())
+    
+    plt.figure(figsize=(10, 5))
+    plt.scatter(score_data.index, score_data.values, alpha=0.5)
+    plt.title("Score History")
+
+    # Reshape data for sklearn
+    X = np.array(range(len(score_data))).reshape(-1, 1)
+    y = score_data.values
+    
+    model = LinearRegression()
+    model.fit(X, y)
+    
+    # Generate predictions
+    y_pred = model.predict(X)
+    plt.plot(score_data.index, y_pred, color='red', label='Regression Line')
+    plt.legend()
+    plt.show()
+
+    # --------------------
+
+    plt.figure(figsize=(10, 5))
+    plt.scatter(reward_data.index, reward_data.values, alpha=0.5)
+    plt.title("Reward History")
+
+    # Reshape data for sklearn
+    X = np.array(range(len(reward_data))).reshape(-1, 1)
+    y = reward_data.values
+    
+    model = LinearRegression()
+    model.fit(X, y)
+    
+    # Generate predictions
+    y_pred = model.predict(X)
+    plt.plot(reward_data.index, y_pred, color='red', label='Regression Line')
+    plt.legend()
+    plt.show()
 
 # Trains and saves the model
 def train(env: TetrisGame):
     # Use gpu
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    policy_kwargs = dict(net_arch=dict(pi=[256, 256], vf=[512, 512]), activation_fn=nn.ReLU)
-    model = PPO('MultiInputPolicy', env, policy_kwargs=policy_kwargs, verbose=1, tensorboard_log="./ppo_tetris_tensorboard/", device=device)
+    policy_kwargs = dict(
+        features_extractor_class=CustomTetrisFeatureExtractor,
+        features_extractor_kwargs=dict(cnn_output_dim=128, mlp_output_dim=64),
+        net_arch=dict(pi=[128, 64], vf=[128, 64]),
+        activation_fn=nn.ReLU
+    )
+    model = PPO('MultiInputPolicy', env, policy_kwargs=policy_kwargs, ent_coef=.01, learning_rate=1e-3, verbose=1, device=device)
+    # tensorboard_log="./ppo_tetris_tensorboard/", if want logging
 
     # Train the model
     model.learn(total_timesteps=50000)
@@ -511,8 +743,7 @@ def train(env: TetrisGame):
     # Save the model
     model.save("ppo_tetris_custom_net")
 
-    df = pd.Series(SCORE_HISTORY)
-    print(df.describe())
+    display_score_history()
 
 def simulate(env: TetrisGame):
     loaded_model = PPO.load("ppo_tetris_custom_net", env=env)
@@ -521,7 +752,7 @@ def simulate(env: TetrisGame):
     env.print() # Using our basic render
 
     # Simulate a few steps
-    for i in range(10):
+    for i in range(50):
         action, _states = loaded_model.predict(obs, deterministic=True)
         # action = env.action_space.sample() # Random action
         print(f"Step {i+1}, Action: {POSSIBLE_ACTIONS[action]}")
@@ -533,13 +764,20 @@ def simulate(env: TetrisGame):
 
 # --- Main Execution ---
 if __name__ == '__main__':
-    # print("Starting Flask-SocketIO server...")
-    # # Use host='0.0.0.0' to make it accessible on your network
-    # socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    args = sys.argv[1:]
 
     env = TetrisGame()
 
-    train(env)
+    if 'train' in args:
+        train(env)
+
+    if 'simulate' in args:
+        simulate(env)
+
+    if len(args) == 0:
+        print("Starting Flask-SocketIO server...")
+        # Use host='0.0.0.0' to make it accessible on your network
+        socketio.run(app, debug=True, host='0.0.0.0', port=5000)
 
     env.close()
     

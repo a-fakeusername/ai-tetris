@@ -11,6 +11,8 @@
     <p v-if="score !== null">Score: {{ score }}</p>
     <p v-if="isGameOver" class="game-over-text">GAME OVER</p>
     <button @click="sendAction('restart')">Restart</button>
+    <br />
+    <button @click="changeMode()">Current: {{ mode }}</button>
     <div class="instructions">
       <p>Use Arrow Keys to Play:</p>
       <ul>
@@ -45,6 +47,7 @@
   const isGameOver = ref(false);
   const boardWidth = ref(10); // Default, will be updated from backend
   const boardHeight = ref(20); // Default, will be updated from backend
+  const mode = ref('player'); // State to manage player vs bot
 
   const activeEvents = ref(new Set()); // Track active events for key handling
   const eventCount = ref({ // Stores counters, makes sure that release before timeout stops DAS
@@ -184,15 +187,25 @@
       console.error('Socket not initialized!');
       return;
     }
-    if (!isGameOver.value) {
-      // console.log('Sending action:', action); // Debugging
-      socket.emit('player_action', { action });
-    } else if (action == 'restart') {
+    if (action == 'restart') {
       socket.emit('player_action', { action: 'restart' });
       console.log("Restarting game...");
+    } else if (!isGameOver.value) {
+      // console.log('Sending action:', action); // Debugging
+      if (mode.value == 'bot') {
+        console.warn("Bot is playing, no action sent.");
+      } else {
+        socket.emit('player_action', { action });
+      }
     } else {
       console.warn('Invalid input on game over.');
     }
+  }
+
+  function changeMode() {
+    mode.value = mode.value == 'player' ? 'bot' : 'player';
+    console.log("Changing mode to: " + mode.value);
+    socket.emit('player_action', { action: 'change_mode' });
   }
 
   // Takes in event.key and gets respective action
