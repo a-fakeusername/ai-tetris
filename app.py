@@ -539,7 +539,7 @@ if __name__ == '__main__':
 
     env = TetrisGame()
 
-    simulate(env)
+    train(env)
 
     env.close()
     
