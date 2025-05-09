@@ -7,8 +7,10 @@ import os
 
 import gymnasium as gym
 from stable_baselines3 import PPO
+import torch
 import torch.nn as nn
 import numpy as np
+import pandas as pd
 
 from queue import Queue
 
@@ -27,6 +29,8 @@ EMPTY_CELL = 0
 # Score multiplier per line cleared at once
 LINE_SCORES = {1: 40, 2: 100, 3: 300, 4: 1200}
 POSSIBLE_ACTIONS = ['move_left', 'move_right', 'move_down', 'rotate', 'hard_drop', 'rotate_reverse', 'rotate_180', 'no_op']
+
+SCORE_HISTORY = []
 
 # --- Tetromino Shapes ---
 # Define shapes as matrices (0 = empty, 1 = block)
@@ -295,7 +299,8 @@ class TetrisGame(gym.Env):
                 self.is_game_over = True
                 self.game_active = False # Stop the loop
                 self.current_piece = None # No more falling piece
-                print(f"Game Over for SID: {self.sid}. Final Score: {self.score}")
+                # print(f"Game Over for SID: {self.sid}. Final Score: {self.score}")
+                SCORE_HISTORY.append(self.score) # Store score history
                 return False
             return True
 
@@ -315,9 +320,9 @@ class TetrisGame(gym.Env):
         if self.is_game_over:
             reward = -1000000 # Large negative reward for game over
         else:
-            reward += (self.score - old_score) // 10 # Reward for score increase
+            reward += (self.score - old_score) / 10 # Reward for score increase
             reward += (self.lines_cleared - old_lines) * 10 # Reward for lines cleared
-            reward += 1 # Small reward for each tick survived
+            reward += .1 # Small reward for each tick survived
             # If needed, add board heuristics
 
         socketio.emit('game_update', self.get_state(), room=self.sid) # Emit state update
@@ -492,50 +497,49 @@ def handle_player_action(data):
             if updated:
                 socketio.emit('game_update', game.get_state(), room=sid)
 
+# Trains and saves the model
+def train(env: TetrisGame):
+    # Use gpu
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    policy_kwargs = dict(net_arch=dict(pi=[256, 256], vf=[512, 512]), activation_fn=nn.ReLU)
+    model = PPO('MultiInputPolicy', env, policy_kwargs=policy_kwargs, verbose=1, tensorboard_log="./ppo_tetris_tensorboard/", device=device)
+
+    # Train the model
+    model.learn(total_timesteps=50000)
+
+    # Save the model
+    model.save("ppo_tetris_custom_net")
+
+    df = pd.Series(SCORE_HISTORY)
+    print(df.describe())
+
+def simulate(env: TetrisGame):
+    loaded_model = PPO.load("ppo_tetris_custom_net", env=env)
+    obs, info = env.reset()
+    print("\nInitial Observation:")
+    env.print() # Using our basic render
+
+    # Simulate a few steps
+    for i in range(10):
+        action, _states = loaded_model.predict(obs, deterministic=True)
+        # action = env.action_space.sample() # Random action
+        print(f"Step {i+1}, Action: {POSSIBLE_ACTIONS[action]}")
+        obs, reward, terminated, truncated, info = env.step(action)
+        env.print()
+        if terminated or truncated:
+            print("Game Over or Truncated!")
+            break
 
 # --- Main Execution ---
 if __name__ == '__main__':
-    print("Starting Flask-SocketIO server...")
-    # Use host='0.0.0.0' to make it accessible on your network
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
-
+    # print("Starting Flask-SocketIO server...")
+    # # Use host='0.0.0.0' to make it accessible on your network
+    # socketio.run(app, debug=True, host='0.0.0.0', port=5000)
 
     env = TetrisGame()
 
-
-    # Uncomment the following lines to test the environment directly
-    '''
-    # print(env.observation_space)
-    # print(env.observation_space.sample()) # Example of a random sample from the space
-
-    # obs, info = env.reset()
-    # print("\nInitial Observation:")
-    # env.print() # Using our basic render
-
-    # # Simulate a few steps
-    # for i in range(5):
-    #     action = env.action_space.sample() # Random action
-    #     print(f"Step {i+1}, Action: {action}")
-    #     obs, reward, terminated, truncated, info = env.step(action)
-    #     env.print()
-    #     if terminated or truncated:
-    #         print("Game Over or Truncated!")
-    #         break
-    '''
-
-
-    # policy_kwargs = dict(net_arch=[dict(pi=[128, 128], vf=[128, 128])], activation_fn=nn.ReLU)
-    # model = PPO('MlpPolicy', env, policy_kwargs=policy_kwargs, verbose=1, tensorboard_log="./ppo_tetris_tensorboard/")
-
-    # Train the model
-    # model.learn(total_timesteps=50000)
-
-    # Save the model
-    # model.save("ppo_tetris_custom_net")
-
-    # To load later:
-    # loaded_model = PPO.load("ppo_tetris_custom_net", env=env)
-
+    simulate(env)
 
     env.close()
     
