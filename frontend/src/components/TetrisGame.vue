@@ -205,7 +205,7 @@
   function changeMode() {
     mode.value = mode.value == 'player' ? 'bot' : 'player';
     console.log("Changing mode to: " + mode.value);
-    socket.emit('player_action', { action: 'change_mode' });
+    socket.emit('player_action', { action: 'change_mode', mode: mode.value });
   }
 
   // Takes in event.key and gets respective action
