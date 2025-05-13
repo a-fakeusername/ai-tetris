@@ -9,7 +9,6 @@ import sys
 import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.common.policies import ActorCriticPolicy
 import torch
 import torch.nn as nn
 import numpy as np
@@ -121,13 +120,14 @@ def generate_7bag():
 
 def create_new_piece(game):
     """Creates the next piece and sets its starting position."""
-    if (game.piece_queue.empty()):
+    # if (game.piece_queue.empty()):
         # Generate a new 7-bag if the queue is empty
-        new_pieces = generate_7bag()
-        for piece in new_pieces:
-            game.piece_queue.put(piece)
-    
-    piece_type = game.piece_queue.get()
+        # new_pieces = generate_7bag()
+        # for piece in new_pieces:
+        #     game.piece_queue.put(piece)
+    # piece_type = game.piece_queue.get()
+
+    piece_type = random.choice(PIECE_ORDER) # Pure Random
     piece_data = TETROMINOES[piece_type]
     return {
         'type': piece_type,
@@ -342,7 +342,7 @@ class TetrisGame(gym.Env):
             for r in range(BOARD_HEIGHT):
                 if self.board[r][c] == EMPTY_CELL:
                     if not prev_air:
-                        hole_reward -= blocks * blocks / 5
+                        hole_reward -= blocks / 5
                 else:
                     blocks += 1
                 prev_air = self.board[r][c] == EMPTY_CELL
@@ -362,15 +362,16 @@ class TetrisGame(gym.Env):
                     break
             heights[c] = height
             if height > .6 * BOARD_HEIGHT:
-                high_col_reward -= (height / BOARD_HEIGHT - .6) * 3
+                high_col_reward -= ((height / BOARD_HEIGHT) - .6) / .6 / 2
 
         # Negative reward for uneven heights
         for c in range(1, BOARD_WIDTH):
             if abs(heights[c] - heights[c - 1]) > 2:
-                uneven_height_reward -= abs(heights[c] - heights[c - 1]) / 10
+                uneven_height_reward -= abs(heights[c] - heights[c - 1]) / 20
 
-        reward = hole_reward + density_reward + high_col_reward + uneven_height_reward
+        reward = hole_reward + high_col_reward + uneven_height_reward
 
+        # print(f"Board Reward: {reward:.2f} (hole: {hole_reward:.2f}, density: {density_reward:.2f}, high_col: {high_col_reward:.2f}, uneven_height: {uneven_height_reward:.2f})") # Debugging
 
         delta_reward = reward - self.prev_board_reward
         self.prev_board_reward = reward
@@ -401,13 +402,13 @@ class TetrisGame(gym.Env):
                 break
 
         if self.is_game_over:
-            reward = -5 # Large negative reward for game over
+            reward = (-100 / (1 + .1 * self.pieces)) # Large negative reward for game over
         else:
-            reward += min((self.score - old_score) / 200, 1)  # Reward for score increase
+            reward += min((self.score - old_score) / 200, .5)  # Reward for score increase
             reward += (self.lines_cleared - old_lines) ** 2 # Reward for lines cleared
-            reward += .2 # Small reward for each tick survived
+            reward += min(.1 + self.pieces / 200, .4) # Small reward for each tick survived
             reward += self.get_board_reward() # Add board heuristics
-
+        
         self.total_reward += reward
 
         socketio.emit('game_update', self.get_state(), room=self.sid) # Emit state update
@@ -674,7 +675,9 @@ class CustomTetrisFeatureExtractor(BaseFeaturesExtractor):
         
         # self.piece_embedding = nn.Embedding(len(PIECE_ORDER), embedding_dim)
         self.piece_mlp = nn.Sequential(
-            nn.Linear(len(PIECE_ORDER), 32),
+            nn.Linear(len(PIECE_ORDER), 16),
+            nn.ReLU(),
+            nn.Linear(16, 32),
             nn.ReLU(),
             nn.Linear(32, 64),
             nn.ReLU(),
@@ -782,11 +785,11 @@ def train(env: TetrisGame):
 
     policy_kwargs = dict(
         features_extractor_class=CustomTetrisFeatureExtractor,
-        features_extractor_kwargs=dict(cnn_output_dim=128, mlp_output_dim=64),
+        features_extractor_kwargs=dict(cnn_output_dim=128, mlp_output_dim=128),
         net_arch=dict(pi=[512, 512], vf=[256, 256]),
         activation_fn=nn.ReLU
     )
-    model = PPO('MultiInputPolicy', env, policy_kwargs=policy_kwargs, ent_coef=.03, learning_rate=1e-3, verbose=1, device=device, n_steps=512)
+    model = PPO('MultiInputPolicy', env, policy_kwargs=policy_kwargs, ent_coef=.05, learning_rate=3e-3, verbose=1, device=device, n_steps=512)
     # tensorboard_log="./ppo_tetris_tensorboard/", if want logging
 
     print("Training Started")
