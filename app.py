@@ -39,9 +39,11 @@ PIECE_INDEXES = {piece: i for i, piece in enumerate(PIECE_ORDER)}
 SIMULATION_DELAY = .1 # Delay in seconds for bot simulation
 
 # Hyperparamaters
-TRAIN_STEPS = 50000
-HIGH_COL_THRESHOLD = .6 # Height threshold for high columns
-USE_CNN = True
+TRAIN_STEPS = 500000
+ENTROPY = .03
+LEARNING_RATE = 3e-4
+HIGH_COL_THRESHOLD = .5 # Height threshold for high columns
+USE_CNN = False
 
 SCORE_HISTORY = []
 REWARD_HISTORY = []
@@ -197,25 +199,73 @@ def calculate_speed(level):
     delay = max(0.1, 0.8 - level * 0.05)
     return delay
 
+def count_holes(board):
+    """Counts the number of holes in the board."""
+    holes = 0
+    for c in range(BOARD_WIDTH):
+        has_block = False
+        for r in range(BOARD_HEIGHT):
+            if board[r][c] != EMPTY_CELL:
+                has_block = True
+            elif has_block:
+                holes += 1
+    return holes
+
+def count_high_columns(board):
+    """Counts the number of high columns in the board."""
+    high_columns = 0
+    for c in range(BOARD_WIDTH):
+        height = 0
+        for r in range(BOARD_HEIGHT):
+            if board[r][c] != EMPTY_CELL:
+                height = BOARD_HEIGHT - r
+                break
+        if height > HIGH_COL_THRESHOLD * BOARD_HEIGHT:
+            high_columns += 1
+    return high_columns
+
+def count_uneven_height(board):
+    heights = [0] * BOARD_WIDTH
+    for c in range(BOARD_WIDTH):
+        height = 0
+        for r in range(BOARD_HEIGHT):
+            if board[r][c] != EMPTY_CELL:
+                height = BOARD_HEIGHT - r
+                break
+        heights[c] = height
+    
+    diffs = []
+    for c in range(1, BOARD_WIDTH):
+        diffs.append(abs(heights[c] - heights[c - 1]))
+    
+    diffs.sort()
+    uneven_height = 0
+    for i in range(2, len(diffs) - 2):
+        uneven_height += diffs[i]
+    return uneven_height
+
+
 # --- Game Logic Class (Optional but good for structure) ---
 # Alternatively, keep functions operating on the state dictionary directly
 class TetrisGame(gym.Env):
-    def __init__(self, sid=0, train=False, delay=False):
+    def __init__(self, sid=0, train=False, run_bot=False):
         super().__init__()
         self.sid = sid
         self.mode = 'player'
-        self.delay = delay
+        self.run_bot = run_bot
         self.reset()
         board_space = gym.spaces.MultiBinary((BOARD_HEIGHT, BOARD_WIDTH)) # Binary representation of the board
         # piece = gym.spaces.Box(low=0, high=len(PIECE_ORDER), shape=(len(PIECE_ORDER),), dtype=np.int8) # One-hot encoding of piece type
         piece_space = gym.spaces.Box(low=0, high=max(BOARD_WIDTH, BOARD_HEIGHT), shape=(8,), dtype=np.int8) # 4 pairs of coordinates (x, y)
         height_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT, shape=(BOARD_WIDTH,), dtype=np.int8) # Height of each column
+        extra_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(4,), dtype=np.float32) # Extra space for future use
         # Store 4 pairs of (x, y)
         self.observation_space = gym.spaces.Dict({
             'board': board_space,
             # 'piece': piece
             'piece': piece_space,
-            'height': height_space
+            'height': height_space,
+            'extra': extra_space
         })
         # rotation, X position + 5 [-5, 4], slide pos + 2 [-2, 2], slide rotate
         self.action_space = gym.spaces.MultiDiscrete([4, 10, 5, 4])
@@ -237,6 +287,7 @@ class TetrisGame(gym.Env):
                         piece_obs[2 * counter] = j + piece['x']
                         piece_obs[2 * counter + 1] = i + piece['y']
                         counter += 1
+        total_height = 0
         for c in range(BOARD_WIDTH):
             height = 0
             for r in range(BOARD_HEIGHT):
@@ -244,11 +295,14 @@ class TetrisGame(gym.Env):
                     height = BOARD_HEIGHT - r
                     break
             height_obs[c] = height
+            total_height += height
+
         return {
             'board': board_obs,
             # 'piece': [1 if piece and piece['type'] == p else 0 for p in PIECE_ORDER] # One-hot encoding of piece type
             'piece': piece_obs,
-            'height': height_obs
+            'height': height_obs,
+            'extra': np.array([count_holes(self.board), count_high_columns(self.board), count_uneven_height(self.board), total_height], dtype=np.float32) # Extra space for future use
         }
     
     def reset(self, seed=None, options=None):
@@ -355,40 +409,20 @@ class TetrisGame(gym.Env):
         high_col_reward = 0
         uneven_height_reward = 0
 
-        # Negative reward for holes, scales with how buried they are
-        for c in range(BOARD_WIDTH):
-            has_block = False
-            for r in range(BOARD_HEIGHT):
-                if self.board[r][c] == EMPTY_CELL:
-                    if has_block:
-                        hole_reward -= .05
-                else:
-                    has_block = True
+        # Negative reward for holes
+        hole_reward = -count_holes(self.board) / 3 # Normalize to a reasonable range
 
         # # Negative reward for too many taken cells
         # taken_cells = sum(1 for row in self.board for cell in row if cell != EMPTY_CELL)
         # if taken_cells > .4 * (BOARD_WIDTH * BOARD_HEIGHT):
         #     density_reward -= (taken_cells / (BOARD_WIDTH * BOARD_HEIGHT) - .4)
 
-        heights = [0] * BOARD_WIDTH
-        max_height = 0
-        # Negative reward for high columns in middle
-        for c in range(1, BOARD_WIDTH - 1):
-            height = 0
-            for r in range(BOARD_HEIGHT):
-                if self.board[r][c] != EMPTY_CELL:
-                    height = BOARD_HEIGHT - r
-                    break
-            heights[c] = height
-            max_height = max(max_height, height)
+        # Negative reward for high columns
+        high_col_reward = -count_high_columns(self.board) / 2
         
-        if max_height > HIGH_COL_THRESHOLD * BOARD_HEIGHT:
-            high_col_reward -= (((max_height / BOARD_HEIGHT) - HIGH_COL_THRESHOLD) / HIGH_COL_THRESHOLD)
 
         # Negative reward for uneven heights
-        for c in range(1, BOARD_WIDTH):
-            if abs(heights[c] - heights[c - 1]) > 2:
-                uneven_height_reward -= abs(heights[c] - heights[c - 1]) / 10
+        uneven_height_reward = -max(count_uneven_height(self.board) - 5, 0) / 5
 
         reward = hole_reward + high_col_reward + uneven_height_reward
         # reward = 0
@@ -426,7 +460,8 @@ class TetrisGame(gym.Env):
                 self.do_action('move_left')
             
             # Hard drop if no extra
-            if slide_x == 0 and slide_rot == 0:
+            # if slide_x == 0 and slide_rot == 0:
+            if True:
                 self.do_action('hard_drop')
             else:
                 while self.current_piece and is_valid_position(self.board, self.current_piece, offset_y=1):
@@ -456,11 +491,11 @@ class TetrisGame(gym.Env):
                 #         break
 
         if self.is_game_over:
-            reward = -100 # Large negative reward for game over
+            reward = -10 # Large negative reward for game over
         else:
-            reward += (self.score - old_score) / 500  # Reward for score increase
-            reward += (self.lines_cleared - old_lines) ** 2 * 5 # Reward for lines cleared
-            reward += .01 # Small reward for each tick survived
+            # reward += max(self.score - max(300, old_score), 0) / 1000  # Reward for score increase
+            reward += (self.lines_cleared - old_lines) * 5 # Reward for lines cleared
+            reward += 1 # Small reward for each tick survived
             reward += self.get_board_reward() # Add board heuristics
         
         self.total_reward += reward
@@ -480,7 +515,7 @@ class TetrisGame(gym.Env):
             self.reset()
             return True
         
-        if self.delay:
+        if self.run_bot:
             socketio.sleep(SIMULATION_DELAY)
 
         updated = False
@@ -508,6 +543,9 @@ class TetrisGame(gym.Env):
             elif action == 'rotate_180':
                 updated = self.rotate(2)
             updated = updated or self.is_game_over
+        if updated:
+            # Emit the updated game state
+            socketio.emit('game_update', self.get_state(), room=self.sid)
         return updated
     
     def print(self):
@@ -745,15 +783,16 @@ class CustomTetrisFeatureExtractor(BaseFeaturesExtractor):
         else:
             extractors["board"] = lambda x: self.board_mlp(x.float().view(x.shape[0], -1).to(self.device))
 
+
         # --- MLP for piece coordinates ---
         self.piece_mlp = nn.Sequential(
             nn.Linear(8, 32), # 4 pairs of coordinates (x, y)
             nn.ReLU(),
-            nn.Linear(32, 128),
+            nn.Linear(32, 64),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(64, 128),
             nn.ReLU(),
-            nn.Linear(64, mlp_output_dim),
+            nn.Linear(128, mlp_output_dim),
             nn.ReLU()
         ).to(self.device)
         
@@ -765,15 +804,23 @@ class CustomTetrisFeatureExtractor(BaseFeaturesExtractor):
             nn.ReLU(),
             nn.Linear(32, 64),
             nn.ReLU(),
-            nn.Linear(64, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, mlp_output_dim),
+            nn.Linear(64, mlp_output_dim // 2),
             nn.ReLU()
         ).to(self.device)
 
         extractors["height"] = lambda x: self.height_mlp(x.float().to(self.device))
+
+        # --- Extra processing (optional) ---
+        self.extra_mlp = nn.Sequential(
+            nn.Linear(4, 32),
+            nn.ReLU(),
+            nn.Linear(32, 64),
+            nn.ReLU(),
+            nn.Linear(64, mlp_output_dim // 2),
+            nn.ReLU()
+        ).to(self.device)
+
+        extractors["extra"] = lambda x: self.extra_mlp(x.float().to(self.device))
 
         self._features_dim = cnn_output_dim + mlp_output_dim + mlp_output_dim # Concatenate all features
 
@@ -795,8 +842,11 @@ class CustomTetrisFeatureExtractor(BaseFeaturesExtractor):
         # Height processing (optional, can be added to board_features)
         height_features = self.height_mlp(height_obs.float())
 
+        # Extra processing (optional, can be added to board_features)
+        extra_features = self.extra_mlp(observations["extra"].float())
+
         # Concatenate the features
-        concatenated_features = torch.cat((board_features, piece_features, height_features), dim=1)
+        concatenated_features = torch.cat((board_features, piece_features, height_features, extra_features), dim=1)
         return concatenated_features
 
 def display_stat_history():
@@ -852,7 +902,7 @@ def train(env: TetrisGame):
         net_arch=dict(pi=[512, 512], vf=[256, 256]),
         activation_fn=nn.ReLU
     )
-    model = PPO('MultiInputPolicy', env, policy_kwargs=policy_kwargs, ent_coef=.01, learning_rate=1e-3, gamma=.995, verbose=1, device=device, n_steps=512)
+    model = PPO('MultiInputPolicy', env, policy_kwargs=policy_kwargs, ent_coef=ENTROPY, learning_rate=LEARNING_RATE, gamma=.995, verbose=1, device=device, n_steps=2048, batch_size=512)
     # tensorboard_log="./ppo_tetris_tensorboard/", if want logging
 
     print("Training Started")
@@ -887,7 +937,7 @@ def simulate(env: TetrisGame):
 if __name__ == '__main__':
     args = sys.argv[1:]
 
-    env = TetrisGame(train=('train' in args), delay=(len(args) == 0))
+    env = TetrisGame(train=('train' in args), run_bot=(len(args) == 0))
 
     if 'train' in args:
         train(env)
