@@ -39,10 +39,10 @@ PIECE_INDEXES = {piece: i for i, piece in enumerate(PIECE_ORDER)}
 SIMULATION_DELAY = .1 # Delay in seconds for bot simulation
 
 # Hyperparamaters
-TRAIN_STEPS = 500000
-ENTROPY = .03
-LEARNING_RATE = 3e-4
-HIGH_COL_THRESHOLD = .5 # Height threshold for high columns
+TRAIN_STEPS = 1000000
+ENTROPY = .02
+LEARNING_RATE = 2e-4
+HIGH_COL_THRESHOLD = .3 # Height threshold for high columns
 USE_CNN = False
 
 SCORE_HISTORY = []
@@ -224,7 +224,21 @@ def count_high_columns(board):
             high_columns += 1
     return high_columns
 
+def count_high_column_score(board):
+    """Calculates a score based on the height of high columns."""
+    score = 0
+    for c in range(BOARD_WIDTH):
+        height = 0
+        for r in range(BOARD_HEIGHT):
+            if board[r][c] != EMPTY_CELL:
+                height = BOARD_HEIGHT - r
+                break
+        if height > HIGH_COL_THRESHOLD * BOARD_HEIGHT:
+            score += (height - (HIGH_COL_THRESHOLD * BOARD_HEIGHT)) / (BOARD_HEIGHT - (HIGH_COL_THRESHOLD * BOARD_HEIGHT))
+    return score
+
 def count_uneven_height(board):
+    """Calculates the uneven height score based on column heights."""
     heights = [0] * BOARD_WIDTH
     for c in range(BOARD_WIDTH):
         height = 0
@@ -248,45 +262,40 @@ def count_uneven_height(board):
 # --- Game Logic Class (Optional but good for structure) ---
 # Alternatively, keep functions operating on the state dictionary directly
 class TetrisGame(gym.Env):
-    def __init__(self, sid=0, train=False, run_bot=False):
+    def __init__(self, sid=0, train=False, run_bot=False, model_file=None):
+        model_file = model_file or "ppo_tetris_custom_net"
+
         super().__init__()
         self.sid = sid
         self.mode = 'player'
         self.run_bot = run_bot
         self.reset()
         board_space = gym.spaces.MultiBinary((BOARD_HEIGHT, BOARD_WIDTH)) # Binary representation of the board
-        # piece = gym.spaces.Box(low=0, high=len(PIECE_ORDER), shape=(len(PIECE_ORDER),), dtype=np.int8) # One-hot encoding of piece type
-        piece_space = gym.spaces.Box(low=0, high=max(BOARD_WIDTH, BOARD_HEIGHT), shape=(8,), dtype=np.int8) # 4 pairs of coordinates (x, y)
+        piece = gym.spaces.Box(low=0, high=1, shape=(len(PIECE_ORDER),), dtype=np.int8) # One-hot encoding of piece type
         height_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT, shape=(BOARD_WIDTH,), dtype=np.int8) # Height of each column
         extra_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(4,), dtype=np.float32) # Extra space for future use
         # Store 4 pairs of (x, y)
         self.observation_space = gym.spaces.Dict({
             'board': board_space,
-            # 'piece': piece
-            'piece': piece_space,
+            'piece': piece,
             'height': height_space,
             'extra': extra_space
         })
         # rotation, X position + 5 [-5, 4], slide pos + 2 [-2, 2], slide rotate
         self.action_space = gym.spaces.MultiDiscrete([4, 10, 5, 4])
         if not train:
-            self.model = PPO.load("ppo_tetris_custom_net", env=self)
+            self.model = PPO.load(model_file, env=self)
 
     def _get_obs(self):
         """Returns the current observation of the game."""
         # Convert board and piece to binary representation
         piece = self.current_piece
         board_obs = np.array([[1 if cell != EMPTY_CELL else 0 for cell in row] for row in self.board], dtype=np.int8)
-        piece_obs = np.array([0] * 8, dtype=np.int8) # 4 pairs of coordinates (x, y) for piece
         height_obs = np.array([0] * BOARD_WIDTH, dtype=np.int8)
+        # One-hot encoding of piece type
+        piece_obs = np.zeros(len(PIECE_ORDER), dtype=np.int8)
         if piece:
-            counter = 0
-            for i, row in enumerate(piece['shape']):
-                for j, cell in enumerate(row):
-                    if cell:
-                        piece_obs[2 * counter] = j + piece['x']
-                        piece_obs[2 * counter + 1] = i + piece['y']
-                        counter += 1
+            piece_obs[PIECE_INDEXES[piece['type']]] = 1
         total_height = 0
         for c in range(BOARD_WIDTH):
             height = 0
@@ -302,7 +311,7 @@ class TetrisGame(gym.Env):
             # 'piece': [1 if piece and piece['type'] == p else 0 for p in PIECE_ORDER] # One-hot encoding of piece type
             'piece': piece_obs,
             'height': height_obs,
-            'extra': np.array([count_holes(self.board), count_high_columns(self.board), count_uneven_height(self.board), total_height], dtype=np.float32) # Extra space for future use
+            'extra': np.array([count_holes(self.board), count_high_column_score(self.board), count_uneven_height(self.board), total_height], dtype=np.float32) # Extra space for future use
         }
     
     def reset(self, seed=None, options=None):
@@ -410,7 +419,7 @@ class TetrisGame(gym.Env):
         uneven_height_reward = 0
 
         # Negative reward for holes
-        hole_reward = -count_holes(self.board) / 3 # Normalize to a reasonable range
+        hole_reward = -count_holes(self.board) / 2 # Normalize to a reasonable range
 
         # # Negative reward for too many taken cells
         # taken_cells = sum(1 for row in self.board for cell in row if cell != EMPTY_CELL)
@@ -418,11 +427,11 @@ class TetrisGame(gym.Env):
         #     density_reward -= (taken_cells / (BOARD_WIDTH * BOARD_HEIGHT) - .4)
 
         # Negative reward for high columns
-        high_col_reward = -count_high_columns(self.board) / 2
+        high_col_reward = -count_high_column_score(self.board)
         
 
         # Negative reward for uneven heights
-        uneven_height_reward = -max(count_uneven_height(self.board) - 5, 0) / 5
+        uneven_height_reward = -max(count_uneven_height(self.board) - 8, 0) / 4
 
         reward = hole_reward + high_col_reward + uneven_height_reward
         # reward = 0
@@ -491,13 +500,14 @@ class TetrisGame(gym.Env):
                 #         break
 
         if self.is_game_over:
-            reward = -10 # Large negative reward for game over
+            reward = -50 # Large negative reward for game over
         else:
             # reward += max(self.score - max(300, old_score), 0) / 1000  # Reward for score increase
-            reward += (self.lines_cleared - old_lines) * 5 # Reward for lines cleared
+            reward += (self.lines_cleared - old_lines) * 10 # Reward for lines cleared
             reward += 1 # Small reward for each tick survived
             reward += self.get_board_reward() # Add board heuristics
-        
+            if (self.pieces * 4 >= BOARD_HEIGHT * BOARD_WIDTH):
+                reward += 3 # Extra reward for placing pieces after filling board
         self.total_reward += reward
 
         socketio.emit('game_update', self.get_state(), room=self.sid) # Emit state update
@@ -786,7 +796,7 @@ class CustomTetrisFeatureExtractor(BaseFeaturesExtractor):
 
         # --- MLP for piece coordinates ---
         self.piece_mlp = nn.Sequential(
-            nn.Linear(8, 32), # 4 pairs of coordinates (x, y)
+            nn.Linear(len(PIECE_ORDER), 32), # 4 pairs of coordinates (x, y)
             nn.ReLU(),
             nn.Linear(32, 64),
             nn.ReLU(),
@@ -892,17 +902,21 @@ def display_stat_history():
     plt.show()
 
 # Trains and saves the model
-def train(env: TetrisGame):
+def train(env: TetrisGame, model_file = None, output_file = None):
     # Use gpu
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    policy_kwargs = dict(
-        features_extractor_class=CustomTetrisFeatureExtractor,
-        features_extractor_kwargs=dict(cnn_output_dim=128, mlp_output_dim=128),
-        net_arch=dict(pi=[512, 512], vf=[256, 256]),
-        activation_fn=nn.ReLU
-    )
-    model = PPO('MultiInputPolicy', env, policy_kwargs=policy_kwargs, ent_coef=ENTROPY, learning_rate=LEARNING_RATE, gamma=.995, verbose=1, device=device, n_steps=2048, batch_size=512)
+    if model_file:
+        model = PPO.load(model_file, env=env)
+        print("Model loaded from file", model_file)
+    else:
+        policy_kwargs = dict(
+            features_extractor_class=CustomTetrisFeatureExtractor,
+            features_extractor_kwargs=dict(cnn_output_dim=128, mlp_output_dim=128),
+            net_arch=dict(pi=[512, 512], vf=[256, 256]),
+            activation_fn=nn.ReLU
+        )
+        model = PPO('MultiInputPolicy', env, policy_kwargs=policy_kwargs, ent_coef=ENTROPY, learning_rate=LEARNING_RATE, gamma=.995, verbose=1, device=device, n_steps=2048, batch_size=512)
     # tensorboard_log="./ppo_tetris_tensorboard/", if want logging
 
     print("Training Started")
@@ -911,12 +925,14 @@ def train(env: TetrisGame):
     model.learn(total_timesteps=TRAIN_STEPS)
 
     # Save the model
-    model.save("ppo_tetris_custom_net")
+    output_file = output_file or "ppo_tetris_custom_net"
+    model.save(output_file)
 
     display_stat_history()
 
-def simulate(env: TetrisGame):
-    loaded_model = PPO.load("ppo_tetris_custom_net", env=env)
+def simulate(env: TetrisGame, model_file = None):
+    model_file = model_file or "ppo_tetris_custom_net"
+    loaded_model = PPO.load(model_file, env=env)
     obs, info = env.reset()
     print("\nInitial Observation:")
     env.print() # Using our basic render
@@ -937,15 +953,13 @@ def simulate(env: TetrisGame):
 if __name__ == '__main__':
     args = sys.argv[1:]
 
-    env = TetrisGame(train=('train' in args), run_bot=(len(args) == 0))
+    env = TetrisGame(train=('train' in args), run_bot=('server' in args), model_file=len(args) > 1 and args[1] or None)
 
     if 'train' in args:
-        train(env)
-
-    if 'simulate' in args:
-        simulate(env)
-
-    if len(args) == 0:
+        train(env, len(args) > 1 and args[1] or None, len(args) > 2 and args[2] or None)
+    elif 'simulate' in args:
+        simulate(env, len(args) > 1 and args[1] or None)
+    elif 'server' in args:
         print("Starting Flask-SocketIO server...")
         # Use host='0.0.0.0' to make it accessible on your network
         socketio.run(app, debug=True, host='0.0.0.0', port=5000)
