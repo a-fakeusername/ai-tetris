@@ -10,7 +10,7 @@ import gymnasium as gym
 import sys
 
 # Hyperparamaters
-TRAIN_STEPS = 2000000
+TRAIN_STEPS = 5000000
 ENTROPY = .02
 LEARNING_RATE = 2e-4
 USE_CNN = False
@@ -71,7 +71,7 @@ def train(env: TetrisGame, model_file = None, output_file = "ppo_tetris_custom_n
             net_arch=dict(pi=[512, 512], vf=[256, 256]),
             activation_fn=nn.ReLU
         )
-        model = PPO('MlpPolicy', env, policy_kwargs=policy_kwargs, ent_coef=ENTROPY, learning_rate=LEARNING_RATE, gamma=.995, verbose=1, device=device, n_steps=2048, batch_size=512)
+        model = PPO('MlpPolicy', env, policy_kwargs=policy_kwargs, ent_coef=ENTROPY, learning_rate=LEARNING_RATE, gamma=.995, verbose=1, device=device, n_steps=10240, batch_size=512)
     # tensorboard_log="./ppo_tetris_tensorboard/", if want logging
 
     print("Training Started")
