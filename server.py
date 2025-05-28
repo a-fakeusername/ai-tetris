@@ -3,6 +3,7 @@ from flask import Flask, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 import os
+import sys
 from tetris_game import TetrisGame
 
 # --- Flask App Setup ---
@@ -13,6 +14,7 @@ app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY')
 CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}}) # Adjust port if needed
 socketio = SocketIO(app, cors_allowed_origins="http://localhost:5173")
 
+model_file = "ppo_tetris_custom_net"
 
 SIMULATION_DELAY = .1 # Delay in seconds for bot simulation
 
@@ -93,12 +95,12 @@ def handle_connect():
     # Initialize game state for the new client
     with state_locks.setdefault(sid, Lock()): # Create lock if it doesn't exist
         if sid not in game_states:
-            game_states[sid] = TetrisGame(sid)
+            game_states[sid] = TetrisGame(sid, model_file=model_file)
             print(f"Initialized new game state for SID: {sid}")
         else:
             # Reconnection? Reset or resume? For simplicity, reset.
             print(f"Reconnected client {sid}, resetting game state.")
-            game_states[sid] = TetrisGame(sid)
+            game_states[sid] = TetrisGame(sid, model_file=model_file)
 
         initial_state = game_states[sid].get_state()
 
@@ -171,4 +173,7 @@ def handle_player_action(data):
                 socketio.emit('game_update', game.get_state(), room=sid)
 
 if __name__ == '__main__':
+    args = sys.argv[1:]
+    if len(args) > 0:
+        model_file = args[0]
     socketio.run(app, debug=True, host='0.0.0.0', port=5000)

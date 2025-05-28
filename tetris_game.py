@@ -228,39 +228,24 @@ def count_uneven_height(board):
 # --- Game Logic Class (Optional but good for structure) ---
 # Alternatively, keep functions operating on the state dictionary directly
 class TetrisGame(gym.Env):
-    def __init__(self, sid=0, train=False, model_file=None):
-        model_file = model_file or "ppo_tetris_custom_net"
-
+    def __init__(self, sid=0, train=False, model_file="ppo_tetris_custom_net"):
         super().__init__()
         self.sid = sid
         self.mode = 'player'
         self.reset()
-        board_space = gym.spaces.MultiBinary((BOARD_HEIGHT, BOARD_WIDTH)) # Binary representation of the board
-        piece = gym.spaces.Box(low=0, high=1, shape=(len(PIECE_ORDER),), dtype=np.int8) # One-hot encoding of piece type
-        height_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT, shape=(BOARD_WIDTH,), dtype=np.int8) # Height of each column
-        extra_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(4,), dtype=np.float32) # Extra space for future use
-        # Store 4 pairs of (x, y)
-        self.observation_space = gym.spaces.Dict({
-            'board': board_space,
-            'piece': piece,
-            'height': height_space,
-            'extra': extra_space
-        })
+        # Heights, piece, extra 4
+        self.observation_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(15,), dtype=np.float32);
         # rotation, X position + 5 [-5, 4], slide pos + 2 [-2, 2], slide rotate
-        self.action_space = gym.spaces.MultiDiscrete([4, 10, 5, 4])
+        self.action_space = gym.spaces.MultiDiscrete([4, 10])
         if not train:
             self.model = PPO.load(model_file, env=self)
 
     def _get_obs(self):
         """Returns the current observation of the game."""
         # Convert board and piece to binary representation
-        piece = self.current_piece
-        board_obs = np.array([[1 if cell != EMPTY_CELL else 0 for cell in row] for row in self.board], dtype=np.int8)
-        height_obs = np.array([0] * BOARD_WIDTH, dtype=np.int8)
+        piece = PIECE_INDEXES[self.current_piece['type']] if self.current_piece else len(PIECE_ORDER)
+        height_obs = [0] * BOARD_WIDTH
         # One-hot encoding of piece type
-        piece_obs = np.zeros(len(PIECE_ORDER), dtype=np.int8)
-        if piece:
-            piece_obs[PIECE_INDEXES[piece['type']]] = 1
         total_height = 0
         for c in range(BOARD_WIDTH):
             height = 0
@@ -271,13 +256,9 @@ class TetrisGame(gym.Env):
             height_obs[c] = height
             total_height += height
 
-        return {
-            'board': board_obs,
-            # 'piece': [1 if piece and piece['type'] == p else 0 for p in PIECE_ORDER] # One-hot encoding of piece type
-            'piece': piece_obs,
-            'height': height_obs,
-            'extra': np.array([count_holes(self.board), count_high_column_score(self.board), count_uneven_height(self.board), total_height], dtype=np.float32) # Extra space for future use
-        }
+        obs: list[float] = height_obs
+        obs.extend([piece, count_holes(self.board), count_high_column_score(self.board), count_uneven_height(self.board), total_height])
+        return obs
     
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
@@ -420,8 +401,8 @@ class TetrisGame(gym.Env):
 
         rot = action[0]
         x_pos = action[1] - 5
-        slide_x = action[2] - 2
-        slide_rot = action[3]
+        # slide_x = action[2] - 2
+        # slide_rot = action[3]
 
         drop_count = 0
 
@@ -435,20 +416,19 @@ class TetrisGame(gym.Env):
             
             # Hard drop if no extra
             # if slide_x == 0 and slide_rot == 0:
-            if True:
-                self.do_action('hard_drop')
-            else:
-                while self.current_piece and is_valid_position(self.board, self.current_piece, offset_y=1):
-                    self.do_action('move_down')
-                    drop_count += 1
+            self.do_action('hard_drop')
 
-                for i in range(slide_x):
-                    self.do_action('move_right')
-                for i in range(-slide_x):
-                    self.do_action('move_left')
+                # while self.current_piece and is_valid_position(self.board, self.current_piece, offset_y=1):
+                #     self.do_action('move_down')
+                #     drop_count += 1
+
+                # for i in range(slide_x):
+                #     self.do_action('move_right')
+                # for i in range(-slide_x):
+                #     self.do_action('move_left')
                 
-                self.do_action(ROTATIONS[slide_rot])
-                self.game_step()
+                # self.do_action(ROTATIONS[slide_rot])
+                # self.game_step()
                 
                 # for i in range(STEP_MOVES):
                 #     old_piece_count = self.pieces
@@ -465,7 +445,7 @@ class TetrisGame(gym.Env):
                 #         break
 
         if self.is_game_over:
-            reward = -50 # Large negative reward for game over
+            reward = -20 # Large negative reward for game over
         else:
             # reward += max(self.score - max(300, old_score), 0) / 1000  # Reward for score increase
             reward += (self.lines_cleared - old_lines) * 10 # Reward for lines cleared
@@ -561,7 +541,7 @@ def simulate(env: TetrisGame, model_file = None):
     for i in range(50):
         action, _states = loaded_model.predict(obs, deterministic=True)
         # action = env.action_space.sample() # Random action
-        print(f"Step {i+1}, Piece: {env.current_piece['type']}\nAction: {f"{action[0]}, {action[1] - 5}, {action[2] - 2}, {action[3]}"}")
+        print(f"Step {i+1}, Piece: {env.current_piece['type']}\nAction: {f"{action[0]}, {action[1] - 5}"}")
         obs, reward, terminated, truncated, info = env.step(action)
         if terminated or truncated:
             print("Game Over or Truncated!")
