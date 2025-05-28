@@ -10,7 +10,7 @@ import gymnasium as gym
 import sys
 
 # Hyperparamaters
-TRAIN_STEPS = 5000000
+TRAIN_STEPS = 100000
 ENTROPY = .02
 LEARNING_RATE = 2e-4
 USE_CNN = False
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     args = sys.argv[1:]
 
     # Train the model
-    train(env, model_file=(args[0] if len(args) >= 1 else None), output_file=(args[1] if len(args) >= 2 else None))
+    train(env, model_file=(args[0] if len(args) >= 1 else None), output_file=(args[1] if len(args) >= 2 else "ppo_tetris_custom_net"))
     
     # Close the environment
     env.close()
