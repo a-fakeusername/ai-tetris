@@ -4,8 +4,15 @@ import sys
 import gymnasium as gym
 from stable_baselines3 import PPO
 import numpy as np
+import neat
+import pickle
 
 from queue import Queue
+
+CONFIG_PATH = "config-feedforward.txt"
+config = neat.Config(neat.DefaultGenome, neat.DefaultReproduction,
+                    neat.DefaultSpeciesSet, neat.DefaultStagnation,
+                    CONFIG_PATH)
 
 # --- Game Constants ---
 BOARD_WIDTH = 10
@@ -228,17 +235,20 @@ def count_uneven_height(board):
 # --- Game Logic Class (Optional but good for structure) ---
 # Alternatively, keep functions operating on the state dictionary directly
 class TetrisGame(gym.Env):
-    def __init__(self, sid=0, train=False, model_file="ppo_tetris_custom_net"):
+    def __init__(self, sid=0, train=False, model_file="ppo_tetris_custom_net", genome_file="neat_model.pkl"):
         super().__init__()
         self.sid = sid
         self.mode = 'player'
         self.reset()
         # Heights, piece, extra 4
-        self.observation_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(15,), dtype=np.float32);
+        self.observation_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(15,), dtype=np.float32)
         # rotation, X position + 5 [-5, 4], slide pos + 2 [-2, 2], slide rotate
         self.action_space = gym.spaces.MultiDiscrete([4, 10])
         if not train:
             self.model = PPO.load(model_file, env=self)
+            with open(genome_file, 'rb') as input_file:
+                loaded_genome = pickle.load(input_file)
+                self.neat = neat.nn.FeedForwardNetwork.create(loaded_genome, config)
 
     def _get_obs(self):
         """Returns the current observation of the game."""
@@ -373,7 +383,7 @@ class TetrisGame(gym.Env):
         #     density_reward -= (taken_cells / (BOARD_WIDTH * BOARD_HEIGHT) - .4)
 
         # Negative reward for high columns
-        high_col_reward = -count_high_column_score(self.board)
+        high_col_reward = -count_high_column_score(self.board) / 1.5
         
 
         # Negative reward for uneven heights
@@ -445,7 +455,7 @@ class TetrisGame(gym.Env):
                 #         break
 
         if self.is_game_over:
-            reward = -20 # Large negative reward for game over
+            reward = 0 # Large negative reward for game over
         else:
             # reward += max(self.score - max(300, old_score), 0) / 1000  # Reward for score increase
             reward += (self.lines_cleared - old_lines) * 10 # Reward for lines cleared

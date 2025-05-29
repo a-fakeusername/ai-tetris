@@ -5,6 +5,7 @@ from flask_cors import CORS
 import os
 import sys
 from tetris_game import TetrisGame
+from train import output_to_action
 
 # --- Flask App Setup ---
 app = Flask(__name__)
@@ -52,8 +53,11 @@ def game_loop_task(sid):
                     continue
                 # Get the current observation
                 obs = game._get_obs()
+
                 # Predict action using the model
-                action, _states = game.model.predict(obs, deterministic=True)
+                # action, _states = game.model.predict(obs, deterministic=True)
+                action = output_to_action(game.neat.activate(obs))
+                
                 # Perform the action
                 game.step(action, callback=socketio.emit('game_update', game.get_state(), room=game.sid))
             else:

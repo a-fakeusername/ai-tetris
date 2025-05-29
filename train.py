@@ -7,13 +7,19 @@ import torch.nn as nn
 from stable_baselines3 import PPO
 from sklearn.linear_model import LinearRegression
 import gymnasium as gym
+import os
 import sys
+import neat
+import pickle
 
-# Hyperparamaters
+# RL Hyperparamaters
 TRAIN_STEPS = 100000
 ENTROPY = .02
 LEARNING_RATE = 2e-4
 USE_CNN = False
+
+# NEAT Hyperparameters
+GENERATIONS = 200
 
 def display_stat_history():
     score_data = pd.Series(SCORE_HISTORY, dtype=int, name='Score')
@@ -57,6 +63,82 @@ def display_stat_history():
     plt.legend()
     plt.show()
 
+def output_to_action(output: list[float]):
+    id = np.argmax(output)
+    action = [id // 10, id % 10]
+    return action
+
+gen = 0
+def eval_genomes(genomes, config):
+    """
+    Evaluates the fitness of each genome in the `genomes` list.
+    `genomes` is a list of (genome_id, genome) tuples.
+    `config` is the NEAT configuration object.
+    """
+    global gen
+    gen += 1
+    fitnesses = []
+    for genome_id, genome in genomes:
+        genome.fitness = 0.0  # Start with fitness 0
+        net = neat.nn.FeedForwardNetwork.create(genome, config)
+        env = TetrisGame(train=True)
+
+        # --- Run multiple episodes for more stable fitness ---
+        num_episodes = 3 # Average fitness over a few episodes
+        total_episode_reward = 0
+
+        for _ in range(num_episodes):
+            observation, info = env.reset()
+            episode_reward = 0
+            terminated = False
+            truncated = False
+            max_steps_per_episode = 500 # Adjust as needed for the environment
+
+            for _ in range(max_steps_per_episode):
+                inputs = observation
+
+                # --- Get network output ---
+                output = net.activate(inputs)
+
+                # action = np.argmax(output)
+                # action = [action // 10, action % 10]
+
+                action = output_to_action(output)
+
+                # --- Step the environment ---
+                observation, reward, terminated, truncated, info = env.step(action)
+                episode_reward += reward
+
+                if terminated or truncated:
+                    break
+            total_episode_reward += episode_reward
+            SCORE_HISTORY.append(env.score)
+            REWARD_HISTORY.append(episode_reward)
+
+        genome.fitness = total_episode_reward / num_episodes
+        fitnesses.append(genome.fitness)
+        env.close()
+    
+    data = pd.DataFrame(fitnesses)
+    print("Finished evaluating generation", gen)
+    print(data.describe())
+
+def run_neat(config_file):
+    # Load configuration.
+    config = neat.Config(neat.DefaultGenome, neat.DefaultReproduction,
+                         neat.DefaultSpeciesSet, neat.DefaultStagnation,
+                         config_file)
+
+    # Create the population, which is the top-level object for a NEAT run.
+    p = neat.Population(config)
+
+    winner = p.run(eval_genomes, GENERATIONS)
+
+    with open("neat_model.pkl", "wb") as output_file:
+        pickle.dump(winner, output_file)
+
+    display_stat_history()
+
 # Trains and saves the model
 def train(env: TetrisGame, model_file = None, output_file = "ppo_tetris_custom_net"):
     # Use gpu
@@ -86,12 +168,16 @@ def train(env: TetrisGame, model_file = None, output_file = "ppo_tetris_custom_n
 
 if __name__ == "__main__":
     # Create the environment
-    env = TetrisGame(train=True)
+    # env = TetrisGame(train=True)
     
-    args = sys.argv[1:]
+    # args = sys.argv[1:]
 
-    # Train the model
-    train(env, model_file=(args[0] if len(args) >= 1 else None), output_file=(args[1] if len(args) >= 2 else "ppo_tetris_custom_net"))
+    # # Train the model
+    # train(env, model_file=(args[0] if len(args) >= 1 else None), output_file=(args[1] if len(args) >= 2 else "ppo_tetris_custom_net"))
     
-    # Close the environment
-    env.close()
+    # # Close the environment
+    # env.close()
+
+    local_dir = os.path.dirname(__file__)
+    config_path = os.path.join(local_dir, 'config-feedforward.txt')
+    run_neat(config_path)
