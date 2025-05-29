@@ -107,7 +107,7 @@ def create_new_piece(game):
         #     game.piece_queue.put(piece)
     # piece_type = game.piece_queue.get()
 
-    piece_type = random.choice(PIECE_ORDER) # Pure Random
+    piece_type = game.rng.choice(PIECE_ORDER) # Pure Random
     piece_data = TETROMINOES[piece_type]
     return {
         'type': piece_type,
@@ -235,10 +235,11 @@ def count_uneven_height(board):
 # --- Game Logic Class (Optional but good for structure) ---
 # Alternatively, keep functions operating on the state dictionary directly
 class TetrisGame(gym.Env):
-    def __init__(self, sid=0, train=False, model_file="ppo_tetris_custom_net", genome_file="neat_model.pkl"):
+    def __init__(self, sid=0, train=False, model_file="ppo_tetris_custom_net", genome_file="neat_model.pkl", seed=0):
         super().__init__()
         self.sid = sid
         self.mode = 'player'
+        self.rng = random.Random(seed)
         self.reset()
         # Heights, piece, extra 4
         self.observation_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(15,), dtype=np.float32)
@@ -474,7 +475,6 @@ class TetrisGame(gym.Env):
         truncated = False # Not used in this game
         info = self._get_info()
         return observation, reward, terminated, truncated, info
-        
 
     def do_action(self, action: str, callback=None) -> bool:
         if action == 'restart':
@@ -510,7 +510,7 @@ class TetrisGame(gym.Env):
         if updated and callback:
             callback(self)
         return updated
-    
+
     def print(self):
         obs_data = self._get_obs()
         piece = self.current_piece

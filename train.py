@@ -11,6 +11,7 @@ import os
 import sys
 import neat
 import pickle
+import random
 
 # RL Hyperparamaters
 TRAIN_STEPS = 100000
@@ -64,11 +65,17 @@ def display_stat_history():
     plt.show()
 
 def output_to_action(output: list[float]):
-    id = np.argmax(output)
-    action = [id // 10, id % 10]
+    # id = np.argmax(output)
+    # action = [id // 10, id % 10]
+    rot = max(0, min(3, int(output[0])))
+    pos = max(0, min(9, int(output[1])))
+    action = [rot, pos]
     return action
 
+rng = random.Random()
 gen = 0
+best_genome = {}
+best_fitness = -1e9
 def eval_genomes(genomes, config):
     """
     Evaluates the fitness of each genome in the `genomes` list.
@@ -77,11 +84,15 @@ def eval_genomes(genomes, config):
     """
     global gen
     gen += 1
+    global rng
+    seed = rng.randrange(0, 1000000000)
+    global best_genome
+    global best_fitness
     fitnesses = []
     for genome_id, genome in genomes:
         genome.fitness = 0.0  # Start with fitness 0
         net = neat.nn.FeedForwardNetwork.create(genome, config)
-        env = TetrisGame(train=True)
+        env = TetrisGame(train=True, seed=seed)
 
         # --- Run multiple episodes for more stable fitness ---
         num_episodes = 3 # Average fitness over a few episodes
@@ -100,9 +111,6 @@ def eval_genomes(genomes, config):
                 # --- Get network output ---
                 output = net.activate(inputs)
 
-                # action = np.argmax(output)
-                # action = [action // 10, action % 10]
-
                 action = output_to_action(output)
 
                 # --- Step the environment ---
@@ -116,6 +124,9 @@ def eval_genomes(genomes, config):
             REWARD_HISTORY.append(episode_reward)
 
         genome.fitness = total_episode_reward / num_episodes
+        
+        if genome.fitness > best_fitness:
+            best_genome = genome
         fitnesses.append(genome.fitness)
         env.close()
     
@@ -134,7 +145,10 @@ def run_neat(config_file):
 
     winner = p.run(eval_genomes, GENERATIONS)
 
-    with open("neat_model.pkl", "wb") as output_file:
+    global best_genome
+    with open("best_genome.pkl", "wb") as output_file:
+        pickle.dump(best_genome, output_file)
+    with open("last_genome.pkl", "wb") as output_file:
         pickle.dump(winner, output_file)
 
     display_stat_history()
