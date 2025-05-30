@@ -92,7 +92,7 @@ def eval_genomes(genomes, config):
     for genome_id, genome in genomes:
         genome.fitness = 0.0  # Start with fitness 0
         net = neat.nn.FeedForwardNetwork.create(genome, config)
-        env = TetrisGame(train=True, seed=seed)
+        env = TetrisGame(seed=seed)
 
         # --- Run multiple episodes for more stable fitness ---
         num_episodes = 3 # Average fitness over a few episodes
@@ -182,7 +182,7 @@ def train(env: TetrisGame, model_file = None, output_file = "ppo_tetris_custom_n
 
 if __name__ == "__main__":
     # Create the environment
-    # env = TetrisGame(train=True)
+    # env = TetrisGame()
     
     # args = sys.argv[1:]
 

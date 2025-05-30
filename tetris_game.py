@@ -9,11 +9,6 @@ import pickle
 
 from queue import Queue
 
-CONFIG_PATH = "config-feedforward.txt"
-config = neat.Config(neat.DefaultGenome, neat.DefaultReproduction,
-                    neat.DefaultSpeciesSet, neat.DefaultStagnation,
-                    CONFIG_PATH)
-
 # --- Game Constants ---
 BOARD_WIDTH = 10
 BOARD_HEIGHT = 20
@@ -98,16 +93,7 @@ def generate_7bag():
     random.shuffle(pieces)
     return pieces
 
-def create_new_piece(game):
-    """Creates the next piece and sets its starting position."""
-    # if (game.piece_queue.empty()):
-        # Generate a new 7-bag if the queue is empty
-        # new_pieces = generate_7bag()
-        # for piece in new_pieces:
-        #     game.piece_queue.put(piece)
-    # piece_type = game.piece_queue.get()
-
-    piece_type = game.rng.choice(PIECE_ORDER) # Pure Random
+def get_piece_info(piece_type: str):
     piece_data = TETROMINOES[piece_type]
     return {
         'type': piece_type,
@@ -118,6 +104,18 @@ def create_new_piece(game):
         'x': BOARD_WIDTH // 2 - len(piece_data['rotations'][0][0]) // 2, # Start roughly centered
         'y':0 # Start at the top
     }
+
+def create_new_piece(game):
+    """Creates the next piece and sets its starting position."""
+    # if (game.piece_queue.empty()):
+        # Generate a new 7-bag if the queue is empty
+        # new_pieces = generate_7bag()
+        # for piece in new_pieces:
+        #     game.piece_queue.put(piece)
+    # piece_type = game.piece_queue.get()
+
+    piece_type = game.rng.choice(PIECE_ORDER) # Pure Random
+    return get_piece_info(piece_type)
 
 def is_valid_position(board, piece, offset_x=0, offset_y=0, rotation_offset=0):
     """Checks if a piece's potential position/rotation is valid."""
@@ -184,6 +182,18 @@ def count_holes(board):
                 holes += 1
     return holes
 
+def count_hole_score(board):
+    """Calculates a score based on the number of holes."""
+    score = 0
+    for c in range(BOARD_WIDTH):
+        depth = 0
+        for r in range(BOARD_HEIGHT):
+            if board[r][c] == EMPTY_CELL:
+                score += depth
+            if board[r][c] != EMPTY_CELL or depth > 0:
+                depth += 1
+    return score / BOARD_HEIGHT
+
 def count_high_columns(board):
     """Counts the number of high columns in the board."""
     high_columns = 0
@@ -235,7 +245,7 @@ def count_uneven_height(board):
 # --- Game Logic Class (Optional but good for structure) ---
 # Alternatively, keep functions operating on the state dictionary directly
 class TetrisGame(gym.Env):
-    def __init__(self, sid=0, train=False, model_file="ppo_tetris_custom_net", genome_file="neat_model.pkl", seed=0):
+    def __init__(self, sid=0, seed=0):
         super().__init__()
         self.sid = sid
         self.mode = 'player'
@@ -245,11 +255,6 @@ class TetrisGame(gym.Env):
         self.observation_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(15,), dtype=np.float32)
         # rotation, X position + 5 [-5, 4], slide pos + 2 [-2, 2], slide rotate
         self.action_space = gym.spaces.MultiDiscrete([4, 10])
-        if not train:
-            self.model = PPO.load(model_file, env=self)
-            with open(genome_file, 'rb') as input_file:
-                loaded_genome = pickle.load(input_file)
-                self.neat = neat.nn.FeedForwardNetwork.create(loaded_genome, config)
 
     def _get_obs(self):
         """Returns the current observation of the game."""
@@ -376,7 +381,7 @@ class TetrisGame(gym.Env):
         uneven_height_reward = 0
 
         # Negative reward for holes
-        hole_reward = -count_holes(self.board) / 2 # Normalize to a reasonable range
+        hole_reward = -count_hole_score(self.board) / 5 # Normalize to a reasonable range
 
         # # Negative reward for too many taken cells
         # taken_cells = sum(1 for row in self.board for cell in row if cell != EMPTY_CELL)
@@ -384,11 +389,10 @@ class TetrisGame(gym.Env):
         #     density_reward -= (taken_cells / (BOARD_WIDTH * BOARD_HEIGHT) - .4)
 
         # Negative reward for high columns
-        high_col_reward = -count_high_column_score(self.board) / 1.5
-        
+        high_col_reward = -count_high_column_score(self.board) / 4
 
         # Negative reward for uneven heights
-        uneven_height_reward = -max(count_uneven_height(self.board) - 8, 0) / 4
+        uneven_height_reward = -max(count_uneven_height(self.board) - 10, 0) / 10
 
         reward = hole_reward + high_col_reward + uneven_height_reward
         # reward = 0
@@ -396,12 +400,13 @@ class TetrisGame(gym.Env):
 
         # print(f"Board Reward: {reward:.2f} (hole: {hole_reward:.2f}, density: {density_reward:.2f}, high_col: {high_col_reward:.2f}, uneven_height: {uneven_height_reward:.2f})") # Debugging
 
-        delta_reward = reward - self.prev_board_reward
-        self.prev_board_reward = reward
-        if delta_reward > 0:
-            delta_reward /= 2
+        return reward
+        # delta_reward = reward - self.prev_board_reward
+        # self.prev_board_reward = reward
+        # if delta_reward > 0:
+        #     delta_reward /= 2
 
-        return delta_reward
+        # return delta_reward
 
     # Function that the model calls to train
     def step(self, action, callback=None):
@@ -456,9 +461,9 @@ class TetrisGame(gym.Env):
                 #         break
 
         if self.is_game_over:
-            reward = 0 # Large negative reward for game over
+            reward = -10 # Large negative reward for game over
         else:
-            # reward += max(self.score - max(300, old_score), 0) / 1000  # Reward for score increase
+            reward += max(self.score - max(1000, old_score), 0) / 300  # Reward for score increase
             reward += (self.lines_cleared - old_lines) * 10 # Reward for lines cleared
             reward += 1 # Small reward for each tick survived
             reward += self.get_board_reward() # Add board heuristics
@@ -511,11 +516,45 @@ class TetrisGame(gym.Env):
             callback(self)
         return updated
 
+    def heuristic_move(self, depth = 0):
+        rewards = [0] * 40
+        for rot in range(4):
+            for pos in range(10):
+                other_game = self.clone()
+                observation, reward, terminated, truncated, info = other_game.step([rot, pos])
+                if terminated or depth == 0:
+                    rewards[rot * 10 + pos] = reward
+                    continue
+                
+                piece_rewards = []
+                for piece in PIECE_ORDER:
+                    other_game.current_piece = get_piece_info(piece)
+                    piece_rewards.append(other_game.heuristic_move(depth + 1))
+                piece_rewards.sort()
+                piece_rewards.append(piece_rewards[0])
+                rewards[rot * 10 + pos] = np.mean(piece_rewards) + reward
+                    
+        if depth > 0:
+            return np.max(rewards)
+        index = np.argmax(rewards)
+        return [index // 10, index % 10]
+
+    def clone(self):
+        other = TetrisGame()
+        other.current_piece = self.current_piece.copy()
+        other.score = self.score
+        other.board = [row[:] for row in self.board]  # Deep copy of the board
+        other.lines_cleared = self.lines_cleared
+        other.pieces = self.pieces
+        other.prev_board_reward = self.prev_board_reward
+        other.total_reward = self.total_reward
+        return other
+                
     def print(self):
         obs_data = self._get_obs()
         piece = self.current_piece
         print("Board State:")
-        for i, row in enumerate(obs_data["board"]):
+        for i, row in enumerate(self.board):
             row_str = ""
             for j, cell in enumerate(row):
                 if piece['y'] <= i and piece['y'] + len(piece['shape']) > i and piece['x'] <= j and piece['x'] + len(piece['shape'][0]) > j:
@@ -525,13 +564,11 @@ class TetrisGame(gym.Env):
                     if piece['shape'][piece_row][piece_col] == 1:
                         row_str += "%"
                         continue
-                if cell == 1:
-                    row_str += "#"
-                else:
+                if cell == 0:
                     row_str += "."
+                else:
+                    row_str += "#"
             print(row_str)
-        print(f"Heights: {obs_data['height']}")
-        print(f"Piece Locs: {obs_data['piece']}")
 
     def close(self):
         """Cleans up the game state."""

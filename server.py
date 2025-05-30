@@ -6,6 +6,9 @@ import os
 import sys
 from tetris_game import TetrisGame
 from train import output_to_action
+from stable_baselines3 import PPO
+import neat
+import pickle
 
 # --- Flask App Setup ---
 app = Flask(__name__)
@@ -16,12 +19,20 @@ CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}}) # Adjust port
 socketio = SocketIO(app, cors_allowed_origins="http://localhost:5173")
 
 model_file = "ppo_tetris_custom_net"
+genome_file = "best_genome.pkl"
+
+CONFIG_PATH = "config-feedforward.txt"
+config = neat.Config(neat.DefaultGenome, neat.DefaultReproduction,
+                    neat.DefaultSpeciesSet, neat.DefaultStagnation,
+                    CONFIG_PATH)
 
 SIMULATION_DELAY = .1 # Delay in seconds for bot simulation
 
 # --- Game State Management ---
 # Store game state per client session ID (sid)
 game_states: dict[int, TetrisGame] = {}
+rl_models: dict[int, PPO] = {}
+neat_models: dict[int, neat.nn.FeedForwardNetwork] = {}
 # Lock to prevent race conditions when modifying game_states or individual states
 state_locks: dict[int, Lock] = {}
 # Store background task references per sid
@@ -47,16 +58,13 @@ def game_loop_task(sid):
 
             # If bot, then perform action
             if game.mode == 'bot':
-                if not game.model:
-                    print(f"Model not loaded for SID: {sid}, skipping action.")
-                    socketio.sleep(SIMULATION_DELAY)
-                    continue
                 # Get the current observation
                 obs = game._get_obs()
 
                 # Predict action using the model
-                # action, _states = game.model.predict(obs, deterministic=True)
-                action = output_to_action(game.neat.activate(obs))
+                # action, _states = rl_models[sid].predict(obs, deterministic=True)
+                # action = output_to_action(neat_models[sid].activate(obs))
+                action = game.heuristic_move()
                 
                 # Perform the action
                 game.step(action, callback=socketio.emit('game_update', game.get_state(), room=game.sid))
@@ -99,12 +107,16 @@ def handle_connect():
     # Initialize game state for the new client
     with state_locks.setdefault(sid, Lock()): # Create lock if it doesn't exist
         if sid not in game_states:
-            game_states[sid] = TetrisGame(sid, model_file=model_file)
+            game_states[sid] = TetrisGame(sid)
+            rl_models[sid] = PPO.load(model_file, env=game_states[sid])
+            with open(genome_file, 'rb') as input_file:
+                loaded_genome = pickle.load(input_file)
+                neat_models[sid] = neat.nn.FeedForwardNetwork.create(loaded_genome, config)
             print(f"Initialized new game state for SID: {sid}")
         else:
             # Reconnection? Reset or resume? For simplicity, reset.
             print(f"Reconnected client {sid}, resetting game state.")
-            game_states[sid] = TetrisGame(sid, model_file=model_file)
+            game_states[sid] = TetrisGame(sid)
 
         initial_state = game_states[sid].get_state()
 
@@ -134,6 +146,8 @@ def handle_disconnect():
             if sid in game_states:
                 game_states[sid].game_active = False # Signal loop to stop
                 del game_states[sid]
+                del rl_models[sid]
+                del neat_models[sid]
                 print(f"Removed game state for SID: {sid}")
         # Remove lock after releasing it
         del state_locks[sid]
