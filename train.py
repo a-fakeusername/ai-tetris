@@ -1,4 +1,4 @@
-from tetris_game import TetrisGame, SCORE_HISTORY, REWARD_HISTORY, PIECE_ORDER, BOARD_WIDTH, BOARD_HEIGHT
+from tetris_game import TetrisGame, SCORE_HISTORY, REWARD_HISTORY, PIECE_ORDER, BOARD_WIDTH, BOARD_HEIGHT, NUM_WEIGHTS
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,6 +12,7 @@ import sys
 import neat
 import pickle
 import random
+import pygad
 
 # RL Hyperparamaters
 TRAIN_STEPS = 100000
@@ -71,6 +72,37 @@ def output_to_action(output: list[float]):
     pos = max(0, min(9, int(output[1])))
     action = [rot, pos]
     return action
+
+# -------------------- Reinforcement Learning (using stable_baselines3) --------------------
+
+# Trains and saves the model
+def run_rl(env: TetrisGame, model_file = None, output_file = "ppo_tetris_custom_net"):
+    # Use gpu
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cpu"
+
+    if model_file:
+        model = PPO.load(model_file, env=env)
+        print("Model loaded from file", model_file)
+    else:
+        policy_kwargs = dict(
+            net_arch=dict(pi=[512, 512], vf=[256, 256]),
+            activation_fn=nn.ReLU
+        )
+        model = PPO('MlpPolicy', env, policy_kwargs=policy_kwargs, ent_coef=ENTROPY, learning_rate=LEARNING_RATE, gamma=.995, verbose=1, device=device, n_steps=10240, batch_size=512)
+    # tensorboard_log="./ppo_tetris_tensorboard/", if want logging
+
+    print("Training Started")
+
+    # Train the model
+    model.learn(total_timesteps=TRAIN_STEPS)
+
+    # Save the model
+    model.save(output_file)
+
+    display_stat_history()
+
+# -------------------- Evolutionary Neural Network (using NEAT) --------------------
 
 rng = random.Random()
 gen = 0
@@ -153,45 +185,99 @@ def run_neat(config_file):
 
     display_stat_history()
 
-# Trains and saves the model
-def train(env: TetrisGame, model_file = None, output_file = "ppo_tetris_custom_net"):
-    # Use gpu
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = "cpu"
+# -------------------- Genetic Algorithm on Heuristics (using PyGAD) --------------------
 
-    if model_file:
-        model = PPO.load(model_file, env=env)
-        print("Model loaded from file", model_file)
+def eval_pygad(ga_instance: pygad.GA, weights, solution_idx):
+    env = TetrisGame(weights=weights, seed=rng.randrange(0, 1000000000))
+    # --- Run multiple episodes for more stable fitness ---
+    num_episodes = 5 # Average fitness over a few episodes
+    episode_rewards = []
+
+    for _ in range(num_episodes):
+        env.reset()
+        terminated = False
+        truncated = False
+        max_steps_per_episode = 500 # Adjust as needed for the environment
+
+        for _ in range(max_steps_per_episode):
+            action = env.heuristic_move()
+
+            # --- Step the environment ---
+            observation, reward, terminated, truncated, info = env.step(action)
+
+            if terminated or truncated:
+                break
+        episode_rewards.append(env.score)
+        SCORE_HISTORY.append(env.score)
+        REWARD_HISTORY.append(env.total_reward)
+    
+    env.close()
+    return np.median(episode_rewards)  # Return the average reward as fitness
+
+def print_pygad_generation(ga_instance: pygad.GA):
+    print(f"Generation = {ga_instance.generations_completed}")
+
+    # Get fitness values of the last generation
+    last_gen_fitness = ga_instance.last_generation_fitness
+    if last_gen_fitness is not None and len(last_gen_fitness) > 0:
+        fitness_df = pd.DataFrame(last_gen_fitness, columns=['Fitness'])
+        print("Last Generation Fitness Stats:")
+        print(fitness_df.describe())
     else:
-        policy_kwargs = dict(
-            net_arch=dict(pi=[512, 512], vf=[256, 256]),
-            activation_fn=nn.ReLU
-        )
-        model = PPO('MlpPolicy', env, policy_kwargs=policy_kwargs, ent_coef=ENTROPY, learning_rate=LEARNING_RATE, gamma=.995, verbose=1, device=device, n_steps=10240, batch_size=512)
-    # tensorboard_log="./ppo_tetris_tensorboard/", if want logging
+        print("No fitness data available for the last generation yet.")
 
-    print("Training Started")
+    print("------------------------------") # Separator
 
-    # Train the model
-    model.learn(total_timesteps=TRAIN_STEPS)
+def run_pygad():
+    # PyGAD training on heuristic weights
+    # Configure the GA parameters
+    ga_instance = pygad.GA(num_generations=50,
+                           num_parents_mating=6,
+                           fitness_func=eval_pygad,
+                           sol_per_pop=30,
+                           num_genes=NUM_WEIGHTS,
+                           gene_type=float,
+                           mutation_type="adaptive",
+                           mutation_probability=[.1, .4],
+                           mutation_percent_genes=15,
+                           parent_selection_type="rank",
+                           keep_elitism=2,
+                           crossover_type="single_point",
+                           crossover_probability=0.9,
+                           initial_population=None,
+                           gene_space=[{"low": 0, "high": 2.0}] * NUM_WEIGHTS,
+                           on_generation=print_pygad_generation,
+                           save_best_solutions=True,
+                           )
+    # Run the GA
+    ga_instance.run()
 
-    # Save the model
-    model.save(output_file)
+    index = np.argmax(ga_instance.best_solutions_fitness)
+    solution = ga_instance.best_solutions[index]
 
+    print("Best solution found: ", solution)
+    print("Fitness of the best solution: ", ga_instance.best_solutions_fitness[index])
+    with open("best_weights.txt", "w") as f:
+        f.write(" ".join(map(str, solution)))
     display_stat_history()
 
 if __name__ == "__main__":
     # Create the environment
-    # env = TetrisGame()
+    env = TetrisGame()
     
+    # Reinforcement Learning training
     # args = sys.argv[1:]
-
     # # Train the model
-    # train(env, model_file=(args[0] if len(args) >= 1 else None), output_file=(args[1] if len(args) >= 2 else "ppo_tetris_custom_net"))
-    
+    # run_rl(env, model_file=(args[0] if len(args) >= 1 else None), output_file=(args[1] if len(args) >= 2 else "ppo_tetris_custom_net"))
     # # Close the environment
     # env.close()
 
-    local_dir = os.path.dirname(__file__)
-    config_path = os.path.join(local_dir, 'config-feedforward.txt')
-    run_neat(config_path)
+
+    # NEAT training with genomes
+    # local_dir = os.path.dirname(__file__)
+    # config_path = os.path.join(local_dir, 'config-feedforward.txt')
+    # run_neat(config_path)
+
+
+    # PyGAD training with heuristics
+    run_pygad()

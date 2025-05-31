@@ -6,6 +6,7 @@ from stable_baselines3 import PPO
 import numpy as np
 import neat
 import pickle
+import pygad
 
 from queue import Queue
 
@@ -20,7 +21,9 @@ PIECE_ORDER = ['I', 'O', 'T', 'S', 'Z', 'J', 'L']
 ROTATIONS = ['no_op', 'rotate', 'rotate_180', 'rotate_reverse']
 PIECE_INDEXES = {piece: i for i, piece in enumerate(PIECE_ORDER)}
 
-HIGH_COL_THRESHOLD = .3 # Height threshold for high columns
+HIGH_COL_THRESHOLD = .4 # Height threshold for high columns
+LOOK_AHEAD = 0 # How many pieces to look ahead for heuristics
+NUM_WEIGHTS = 10
 
 SCORE_HISTORY = []
 REWARD_HISTORY = []
@@ -237,44 +240,42 @@ def count_uneven_height(board):
     
     diffs.sort()
     uneven_height = 0
-    for i in range(2, len(diffs) - 2):
+    for i in range(len(diffs) - 2):
         uneven_height += diffs[i]
     return uneven_height
 
-
-# --- Game Logic Class (Optional but good for structure) ---
-# Alternatively, keep functions operating on the state dictionary directly
 class TetrisGame(gym.Env):
-    def __init__(self, sid=0, seed=0):
+    def __init__(self, sid=0, seed=42, weights=[1/4, 1/2, 1/2, 4, 1/4, 1, 1/10, 1, 1, 1]):
         super().__init__()
         self.sid = sid
         self.mode = 'player'
+        self.weights = weights
         self.rng = random.Random(seed)
         self.reset()
         # Heights, piece, extra 4
-        self.observation_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(15,), dtype=np.float32)
+        # self.observation_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(15,), dtype=np.float32)
         # rotation, X position + 5 [-5, 4], slide pos + 2 [-2, 2], slide rotate
-        self.action_space = gym.spaces.MultiDiscrete([4, 10])
+        # self.action_space = gym.spaces.MultiDiscrete([4, 10])
 
-    def _get_obs(self):
-        """Returns the current observation of the game."""
-        # Convert board and piece to binary representation
-        piece = PIECE_INDEXES[self.current_piece['type']] if self.current_piece else len(PIECE_ORDER)
-        height_obs = [0] * BOARD_WIDTH
-        # One-hot encoding of piece type
-        total_height = 0
-        for c in range(BOARD_WIDTH):
-            height = 0
-            for r in range(BOARD_HEIGHT):
-                if self.board[r][c] != EMPTY_CELL:
-                    height = BOARD_HEIGHT - r
-                    break
-            height_obs[c] = height
-            total_height += height
+    # def _get_obs(self):
+    #     """Returns the current observation of the game."""
+    #     # Convert board and piece to binary representation
+    #     piece = PIECE_INDEXES[self.current_piece['type']] if self.current_piece else len(PIECE_ORDER)
+    #     height_obs = [0] * BOARD_WIDTH
+    #     # One-hot encoding of piece type
+    #     total_height = 0
+    #     for c in range(BOARD_WIDTH):
+    #         height = 0
+    #         for r in range(BOARD_HEIGHT):
+    #             if self.board[r][c] != EMPTY_CELL:
+    #                 height = BOARD_HEIGHT - r
+    #                 break
+    #         height_obs[c] = height
+    #         total_height += height
 
-        obs: list[float] = height_obs
-        obs.extend([piece, count_holes(self.board), count_high_column_score(self.board), count_uneven_height(self.board), total_height])
-        return obs
+    #     obs: list[float] = height_obs
+    #     obs.extend([piece, count_holes(self.board), count_high_column_score(self.board), count_uneven_height(self.board), total_height])
+    #     return obs
     
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
@@ -288,13 +289,13 @@ class TetrisGame(gym.Env):
         self.fall_delay = calculate_speed(0)
         self.lines_cleared = 0
         self.pieces = 0
-        self.piece_queue = Queue()
+        # self.piece_queue = Queue()
         self.current_piece = create_new_piece(self)
 
-        observation = self._get_obs()
-        info = self._get_info()
+        # observation = self._get_obs()
+        # info = self._get_info()
 
-        return observation, info
+        # return observation, info
 
     def get_state(self):
         """Returns the current game state dictionary."""
@@ -368,8 +369,6 @@ class TetrisGame(gym.Env):
                 self.game_active = False # Stop the loop
                 self.current_piece = None # No more falling piece
                 # print(f"Game Over for SID: {self.sid}. Final Score: {self.score}")
-                SCORE_HISTORY.append(self.score) # Store score history
-                REWARD_HISTORY.append(self.total_reward) # Store reward history
                 return False, True
             return True, True
 
@@ -381,7 +380,7 @@ class TetrisGame(gym.Env):
         uneven_height_reward = 0
 
         # Negative reward for holes
-        hole_reward = -count_hole_score(self.board) / 5 # Normalize to a reasonable range
+        hole_reward = -count_hole_score(self.board) * self.weights[0] - count_holes(self.board) * self.weights[1]
 
         # # Negative reward for too many taken cells
         # taken_cells = sum(1 for row in self.board for cell in row if cell != EMPTY_CELL)
@@ -389,10 +388,10 @@ class TetrisGame(gym.Env):
         #     density_reward -= (taken_cells / (BOARD_WIDTH * BOARD_HEIGHT) - .4)
 
         # Negative reward for high columns
-        high_col_reward = -count_high_column_score(self.board) / 4
+        high_col_reward = -count_high_column_score(self.board) * self.weights[2]
 
         # Negative reward for uneven heights
-        uneven_height_reward = -max(count_uneven_height(self.board) - 10, 0) / 10
+        uneven_height_reward = -max(count_uneven_height(self.board) - self.weights[3], 0) * self.weights[4]
 
         reward = hole_reward + high_col_reward + uneven_height_reward
         # reward = 0
@@ -461,21 +460,22 @@ class TetrisGame(gym.Env):
                 #         break
 
         if self.is_game_over:
-            reward = -10 # Large negative reward for game over
+            reward = -10 * self.weights[5] # Large negative reward for game over
         else:
-            reward += max(self.score - max(1000, old_score), 0) / 300  # Reward for score increase
-            reward += (self.lines_cleared - old_lines) * 10 # Reward for lines cleared
+            reward += min((self.score - old_score) * self.weights[6] / 100, self.weights[7] * 10)  # Reward for score increase
+            reward += (self.lines_cleared - old_lines) ** 2 * self.weights[8] # Reward for lines cleared
             reward += 1 # Small reward for each tick survived
-            reward += self.get_board_reward() # Add board heuristics
-            if (self.pieces * 4 >= BOARD_HEIGHT * BOARD_WIDTH):
-                reward += 3 # Extra reward for placing pieces after filling board
+            reward += self.get_board_reward() * self.weights[9] # Add board heuristics
+            # if (self.pieces * 4 >= BOARD_HEIGHT * BOARD_WIDTH):
+            #     reward += 1
         self.total_reward += reward
 
         if callback:
             # Call the callback function with the current state
             callback(self)
 
-        observation = self._get_obs()
+        # observation = self._get_obs()
+        observation = None
         terminated = self.is_game_over
         truncated = False # Not used in this game
         info = self._get_info()
@@ -517,12 +517,17 @@ class TetrisGame(gym.Env):
         return updated
 
     def heuristic_move(self, depth = 0):
-        rewards = [0] * 40
+        piece_type = self.current_piece['type']
+        rewards = [-1e9] * 40
         for rot in range(4):
+            if piece_type == 'O' and rot > 0:
+                continue
+            if piece_type in ['I', 'S', 'Z'] and rot >= 2:
+                continue
             for pos in range(10):
                 other_game = self.clone()
                 observation, reward, terminated, truncated, info = other_game.step([rot, pos])
-                if terminated or depth == 0:
+                if terminated or depth == LOOK_AHEAD:
                     rewards[rot * 10 + pos] = reward
                     continue
                 
@@ -530,28 +535,27 @@ class TetrisGame(gym.Env):
                 for piece in PIECE_ORDER:
                     other_game.current_piece = get_piece_info(piece)
                     piece_rewards.append(other_game.heuristic_move(depth + 1))
-                piece_rewards.sort()
-                piece_rewards.append(piece_rewards[0])
-                rewards[rot * 10 + pos] = np.mean(piece_rewards) + reward
+                rewards[rot * 10 + pos] = (np.median(piece_rewards) + min(piece_rewards)) / 2 + reward
                     
         if depth > 0:
-            return np.max(rewards)
+            return max(rewards)
         index = np.argmax(rewards)
         return [index // 10, index % 10]
 
     def clone(self):
-        other = TetrisGame()
-        other.current_piece = self.current_piece.copy()
+        other = TetrisGame(weights=self.weights)
+        other.current_piece = get_piece_info(self.current_piece['type']) if self.current_piece else None
         other.score = self.score
         other.board = [row[:] for row in self.board]  # Deep copy of the board
         other.lines_cleared = self.lines_cleared
         other.pieces = self.pieces
         other.prev_board_reward = self.prev_board_reward
         other.total_reward = self.total_reward
+        other.is_game_over = self.is_game_over
+        other.game_active = self.game_active
         return other
                 
     def print(self):
-        obs_data = self._get_obs()
         piece = self.current_piece
         print("Board State:")
         for i, row in enumerate(self.board):
