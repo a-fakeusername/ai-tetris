@@ -1,0 +1,32 @@
+version: '3.8' # Specifies the Docker Compose file format version
+
+services:
+  frontend:
+    container_name: tetris-frontend
+    build:
+      context: ./frontend # Path to the frontend Dockerfile
+      dockerfile: Dockerfile # Name of the Dockerfile for the frontend
+    image: tetris-frontend:v1
+    ports:
+      - "8080:80" # Maps port 8080 on your host to port 80 in the frontend container
+    networks:
+      - tetris-network
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    container_name: tetris-backend
+    build:
+      context: .
+      dockerfile: Dockerfile # Name of the Dockerfile for the backend
+    image: tetris-backend:v1
+    ports:
+      - "5000:5000"
+    networks:
+      - tetris-network
+    restart: unless-stopped
+
+networks:
+  tetris-network:
+    driver: bridge # Defines a custom bridge network for the services

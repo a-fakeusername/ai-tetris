@@ -15,8 +15,8 @@ app = Flask(__name__)
 # In a real app, use a secret key from environment variables
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY')
 # Enable CORS for your Vue frontend origin (adjust in production)
-CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}}) # Adjust port if needed
-socketio = SocketIO(app, cors_allowed_origins="http://localhost:5173")
+CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "http://localhost:8080"]}}) # Adjust port if needed
+socketio = SocketIO(app, cors_allowed_origins=["http://localhost:5173", "http://localhost:8080"])
 
 model_file = "ppo_tetris_custom_net"
 genome_file = "best_genome.pkl"
@@ -198,4 +198,6 @@ if __name__ == '__main__':
         model_file = args[0]
     with open("best_weights.txt") as weights_file:
         weights = list(map(float, weights_file.read().strip().split()))
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    # socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    from waitress import serve
+    serve(app, host='0.0.0.0', port=5000)
