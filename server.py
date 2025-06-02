@@ -198,6 +198,9 @@ if __name__ == '__main__':
         model_file = args[0]
     with open("best_weights.txt") as weights_file:
         weights = list(map(float, weights_file.read().strip().split()))
-    # socketio.run(app, debug=True, host='0.0.0.0', port=5000)
-    from waitress import serve
-    serve(app, host='0.0.0.0', port=5000)
+
+    if os.environ.get("MODE") == "DEBUG":
+        socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    elif os.environ.get("MODE") == "PRODUCTION":
+        from waitress import serve
+        serve(app, host='0.0.0.0', port=5000)

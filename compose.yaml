@@ -25,6 +25,8 @@ services:
       - "5000:5000"
     networks:
       - tetris-network
+    environment:
+      - MODE=PRODUCTION
     restart: unless-stopped
 
 networks:

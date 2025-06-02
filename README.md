@@ -1,15 +1,20 @@
 # AI Tetris Bot
 
-Info
+### Info
 
-- Uses reinforcement learning
-- Has inputs of board state and piece
+- Current model uses heuristics tuned with a genetic algorithm, averages >10k score per game
+- Researched other reinforcement learning bots
+- Reinforcement Learning model averages just 1k score per game
+- Has inputs of certain board info and states
+- Genetic model using NEAT fails to play optimally
 
-Instructions
+### Instructions
 
-- pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 - pip install -r requirements.txt
 - cd frontend, npm i
-- call python app.py for normal website
+- call python server.py for backend
 - have another terminal to /frontend and run npm run dev and connect to localhost:5173
-- add train or simulate arguments to train model or simulate on print
+- python train.py to train
+- Also can do docker compose up -d --build to build and run
+
+
