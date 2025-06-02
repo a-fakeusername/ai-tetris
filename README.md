@@ -1,6 +1,14 @@
 # AI Tetris Bot
 
-### Info
+## Summary
+### Reinforcement Learning (Stable Baselines3)
+I attempted to make a tetris bot using AI, starting with reinforcement learning. Initially, I had observation space using a binary grid, but changed it to heights, holes, etc. I trained for around 7 hours total, and it plays decently well, averaging 1k score.
+### Neuroevolution (NEAT)
+I switched to a neuroevolution-based neural network, and after training using the same configuration as reinforcement learning, it unfortunately yielded unimpressive results.
+### Heuristic + Genetic Algorithm (PyGAD)
+Lastly, since most Tetris bots are heuristic-based, I decided to create a heuristic algorithm with 0 lookahead (1 is too slow to train). I optimized the weights using a genetic algorithm, which improved average scores by 30%.
+
+## Setup Info
 
 - Current model uses heuristics tuned with a genetic algorithm, averages >10k score per game
 - Researched other reinforcement learning bots
@@ -8,7 +16,7 @@
 - Has inputs of certain board info and states
 - Genetic model using NEAT fails to play optimally
 
-### Instructions
+## Instructions
 
 - pip install -r requirements.txt
 - cd frontend, npm i
