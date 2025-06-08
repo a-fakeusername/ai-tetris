@@ -15,10 +15,9 @@ import random
 import pygad
 
 # RL Hyperparamaters
-TRAIN_STEPS = 100000
+TRAIN_STEPS = 1000000
 ENTROPY = .02
 LEARNING_RATE = 2e-4
-USE_CNN = False
 
 # NEAT Hyperparameters
 GENERATIONS = 200
@@ -265,19 +264,20 @@ if __name__ == "__main__":
     # Create the environment
     env = TetrisGame()
     
-    # Reinforcement Learning training
-    # args = sys.argv[1:]
-    # # Train the model
-    # run_rl(env, model_file=(args[0] if len(args) >= 1 else None), output_file=(args[1] if len(args) >= 2 else "ppo_tetris_custom_net"))
-    # # Close the environment
-    # env.close()
+    model_type = os.environ.get("MODEL")
 
+    if model_type == 'RL':
+        # Reinforcement Learning training
+        args = sys.argv[1:]
+        # Train the model
+        run_rl(env, model_file=(args[0] if len(args) >= 1 else None), output_file=(args[1] if len(args) >= 2 else "ppo_tetris_custom_net"))
+        # Close the environment
+        env.close()
+    else:
+        # PyGAD training with heuristics
+        run_pygad()
 
     # NEAT training with genomes
     # local_dir = os.path.dirname(__file__)
     # config_path = os.path.join(local_dir, 'config-feedforward.txt')
     # run_neat(config_path)
-
-
-    # PyGAD training with heuristics
-    run_pygad()

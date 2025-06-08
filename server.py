@@ -12,8 +12,6 @@ import pickle
 
 # --- Flask App Setup ---
 app = Flask(__name__)
-# In a real app, use a secret key from environment variables
-app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY')
 # Enable CORS for your Vue frontend origin (adjust in production)
 CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "http://localhost:8080"]}}) # Adjust port if needed
 socketio = SocketIO(app, cors_allowed_origins=["http://localhost:5173", "http://localhost:8080"])
@@ -27,6 +25,7 @@ config = neat.Config(neat.DefaultGenome, neat.DefaultReproduction,
                     CONFIG_PATH)
 
 SIMULATION_DELAY = .1 # Delay in seconds for bot simulation
+MODEL_TYPE = os.environ.get("MODEL")
 
 # --- Game State Management ---
 # Store game state per client session ID (sid)
@@ -59,13 +58,15 @@ def game_loop_task(sid):
 
             # If bot, then perform action
             if game.mode == 'bot':
-                # Get the current observation
-                # obs = game._get_obs()
-
+                action = []
                 # Predict action using the model
-                # action, _states = rl_models[sid].predict(obs, deterministic=True)
+                if MODEL_TYPE == 'RL':
+                # Get the current observation
+                    obs = game._get_obs()
+                    action, _states = rl_models[sid].predict(obs, deterministic=True)
+                else:
+                    action = game.heuristic_move()
                 # action = output_to_action(neat_models[sid].activate(obs))
-                action = game.heuristic_move()
                 
                 # Perform the action
                 game.step(action, callback=socketio.emit('game_update', game.get_state(), room=game.sid))
@@ -110,7 +111,7 @@ def handle_connect():
         print(weights)
         if sid not in game_states:
             game_states[sid] = TetrisGame(sid, weights=weights)
-            # rl_models[sid] = PPO.load(model_file, env=game_states[sid])
+            rl_models[sid] = PPO.load(model_file, env=game_states[sid])
             # with open(genome_file, 'rb') as input_file:
             #     loaded_genome = pickle.load(input_file)
                 # neat_models[sid] = neat.nn.FeedForwardNetwork.create(loaded_genome, config)
@@ -199,7 +200,7 @@ if __name__ == '__main__':
     with open("best_weights.txt") as weights_file:
         weights = list(map(float, weights_file.read().strip().split()))
 
-    if os.environ.get("MODE") == "DEBUG":
+    if os.environ.get("MODE") == "DEV":
         socketio.run(app, debug=True, host='0.0.0.0', port=5000)
     elif os.environ.get("MODE") == "PRODUCTION":
         from waitress import serve
