@@ -8,6 +8,7 @@ from stable_baselines3 import PPO
 from sklearn.linear_model import LinearRegression
 import gymnasium as gym
 import os
+from dotenv import load_dotenv
 import sys
 import neat
 import pickle
@@ -15,7 +16,7 @@ import random
 import pygad
 
 # RL Hyperparamaters
-TRAIN_STEPS = 1000000
+TRAIN_STEPS = 20000000
 ENTROPY = .02
 LEARNING_RATE = 2e-4
 
@@ -265,6 +266,7 @@ if __name__ == "__main__":
     env = TetrisGame()
     
     model_type = os.environ.get("MODEL")
+    print(model_type)
 
     if model_type == 'RL':
         # Reinforcement Learning training

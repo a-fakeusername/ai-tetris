@@ -491,6 +491,7 @@ class TetrisGame(gym.Env):
             # Call the callback function with the current state
             callback(self)
 
+        observation = None
         if MODEL_TYPE == 'RL':
             observation = self._get_obs()
         terminated = self.is_game_over

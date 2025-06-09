@@ -24,5 +24,6 @@ Lastly, since most Tetris bots are heuristic-based, I decided to create a heuris
 - have another terminal to /frontend and run npm run dev and connect to localhost:5173
 - python train.py to train
 - Also can do docker compose up -d --build to build and run
+- .env MODE={DEV, PRODUCTION} (for server), MODEL={RL, HEURISTIC}
 
 
