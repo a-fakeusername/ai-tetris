@@ -16,9 +16,10 @@ import random
 import pygad
 
 # RL Hyperparamaters
-TRAIN_STEPS = 20000000
+TRAIN_STEPS = 1000000
 ENTROPY = .02
 LEARNING_RATE = 2e-4
+PLOT_POINTS = 1000  # Number of points to plot in the history
 
 # NEAT Hyperparameters
 GENERATIONS = 200
@@ -29,8 +30,34 @@ def display_stat_history():
     print(score_data.describe())
     print(reward_data.describe())
     
+    # Limit to fit PLOT_POINTS
+    small_score_history = []
+    small_reward_history = []
+    size = len(SCORE_HISTORY)
+    if size <= PLOT_POINTS:
+        small_score_history = SCORE_HISTORY
+        small_reward_history = REWARD_HISTORY
+    else:
+        score_sum = 0
+        reward_sum = 0
+        curr = 1
+        curr_size = 0
+        for i in range(size):
+            score_sum += SCORE_HISTORY[i]
+            reward_sum += REWARD_HISTORY[i]
+            curr_size += 1
+            if i >= curr * size / PLOT_POINTS:
+                small_score_history.append(score_sum / curr_size)
+                small_reward_history.append(reward_sum / curr_size)
+                score_sum = 0
+                reward_sum = 0
+                curr += 1
+                curr_size = 0
+        score_data = pd.Series(small_score_history, dtype=float, name='Score')
+        reward_data = pd.Series(small_reward_history, dtype=float, name='Reward')
+
     plt.figure(figsize=(10, 5))
-    plt.scatter(score_data.index, score_data.values, alpha=0.5)
+    plt.scatter(score_data.index, score_data.values, alpha=0.5) 
     plt.title("Score History")
 
     # Reshape data for sklearn

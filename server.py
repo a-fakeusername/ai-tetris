@@ -199,6 +199,8 @@ if __name__ == '__main__':
         model_file = args[0]
     with open("best_weights.txt") as weights_file:
         weights = list(map(float, weights_file.read().strip().split()))
+    
+    print("Model type:", MODEL_TYPE)
 
     if os.environ.get("MODE") == "DEV":
         socketio.run(app, debug=True, host='0.0.0.0', port=5000)
