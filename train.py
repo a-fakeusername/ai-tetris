@@ -16,7 +16,7 @@ import random
 import pygad
 
 # RL Hyperparamaters
-TRAIN_STEPS = 1000000
+TRAIN_STEPS = 40000000
 ENTROPY = .02
 LEARNING_RATE = 2e-4
 PLOT_POINTS = 1000  # Number of points to plot in the history
