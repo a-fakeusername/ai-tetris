@@ -178,5 +178,5 @@ cython_debug/
 ppo_tetris_tensorboard/
 ppo_tetris_custom_net.zip
 
-frontend/node_modules/
-frontend/.vscode/
+/frontend/node_modules/
+/frontend/.vscode/
