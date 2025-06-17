@@ -108,7 +108,6 @@ def handle_connect():
     print(f"Client connected: {sid}")
     # Initialize game state for the new client
     with state_locks.setdefault(sid, Lock()): # Create lock if it doesn't exist
-        print(weights)
         if sid not in game_states:
             game_states[sid] = TetrisGame(sid, weights=weights)
             rl_models[sid] = PPO.load(model_file, env=game_states[sid])

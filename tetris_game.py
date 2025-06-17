@@ -1,5 +1,6 @@
 import random
 import sys
+import time
 import os
 from dotenv import load_dotenv
 
@@ -245,7 +246,7 @@ def count_uneven_height(board):
     return uneven_height
 
 class TetrisGame(gym.Env):
-    def __init__(self, sid=0, seed=42, weights=[1/4, 1/2, 1/2, 4, 1/4, 1, 1/10, 1, 1, 1]):
+    def __init__(self, sid=0, seed=time.time(), weights=[1/4, 1/2, 1/2, 4, 1/4, 1, 1/10, 1, 1, 1]):
         super().__init__()
         self.sid = sid
         self.mode = 'player'
