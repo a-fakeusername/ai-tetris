@@ -5,8 +5,13 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.results_plotter import load_results
 from sklearn.linear_model import LinearRegression
 import gymnasium as gym
+import multiprocessing
+
 import os
 from dotenv import load_dotenv
 import sys
@@ -15,9 +20,12 @@ import pickle
 import random
 import pygad
 
+LOG_DIR = "./logs/"
+os.makedirs(LOG_DIR, exist_ok=True)
+
 # RL Hyperparamaters
-TRAIN_STEPS = 1000000
-ENTROPY = .02
+TRAIN_STEPS = 10000000
+ENTROPY = .05
 LEARNING_RATE = 2e-4
 PLOT_POINTS = 1000  # Number of points to plot in the history
 
@@ -25,55 +33,61 @@ PLOT_POINTS = 1000  # Number of points to plot in the history
 GENERATIONS = 200
 
 def display_stat_history():
-    score_data = pd.Series(SCORE_HISTORY, dtype=int, name='Score')
-    reward_data = pd.Series(REWARD_HISTORY, dtype=float, name='Reward')
-    print(score_data.describe())
+    # score_data = pd.Series(SCORE_HISTORY, dtype=int, name='Score')
+    # reward_data = pd.Series(REWARD_HISTORY, dtype=float, name='Reward')
+    results_df = load_results(LOG_DIR)
+    
+    # Check if results were loaded
+    if results_df.empty:
+        print("No results found in log directory.")
+        return
+
+    # 'r' column is the episode reward, 'l' is the episode length, 't' is time
+    reward_data = results_df['r'] # Since your custom reward includes the score, we'll plot 'r' for both.
+
     print(reward_data.describe())
     
     # Limit to fit PLOT_POINTS
-    small_score_history = []
-    small_reward_history = []
-    size = len(SCORE_HISTORY)
-    if size <= PLOT_POINTS:
-        small_score_history = SCORE_HISTORY
-        small_reward_history = REWARD_HISTORY
-    else:
-        score_sum = 0
-        reward_sum = 0
-        curr = 1
-        curr_size = 0
-        for i in range(size):
-            score_sum += SCORE_HISTORY[i]
-            reward_sum += REWARD_HISTORY[i]
-            curr_size += 1
-            if i >= curr * size / PLOT_POINTS:
-                small_score_history.append(score_sum / curr_size)
-                small_reward_history.append(reward_sum / curr_size)
-                score_sum = 0
-                reward_sum = 0
-                curr += 1
-                curr_size = 0
-        score_data = pd.Series(small_score_history, dtype=float, name='Score')
-        reward_data = pd.Series(small_reward_history, dtype=float, name='Reward')
+    size = len(reward_data)
+    if size > PLOT_POINTS:
+        mult = size / PLOT_POINTS
+        reward_data = reward_data.groupby(reward_data.index // mult).mean().head(PLOT_POINTS)
 
-    plt.figure(figsize=(10, 5))
-    plt.scatter(score_data.index, score_data.values, alpha=0.5) 
-    plt.title("Score History")
+        # score_sum = 0
+        # reward_sum = 0
+        # curr = 1
+        # curr_size = 0
+        # for i in range(size):
+        #     score_sum += SCORE_HISTORY[i]
+        #     reward_sum += REWARD_HISTORY[i]
+        #     curr_size += 1
+        #     if i >= curr * size / PLOT_POINTS:
+        #         small_score_history.append(score_sum / curr_size)
+        #         small_reward_history.append(reward_sum / curr_size)
+        #         score_sum = 0
+        #         reward_sum = 0
+        #         curr += 1
+        #         curr_size = 0
+        # reward_data = pd.Series(small_reward_history, dtype=float, name='Reward')
 
-    # Reshape data for sklearn
-    X = np.array(range(len(score_data))).reshape(-1, 1)
-    y = score_data.values
+    # plt.figure(figsize=(10, 5))
+    # plt.scatter(score_data.index, score_data.values, alpha=0.5) 
+    # plt.title("Score History")
+
+    # # Reshape data for sklearn
+    # X = np.array(range(len(score_data))).reshape(-1, 1)
+    # y = score_data.values
     
-    model = LinearRegression()
-    model.fit(X, y)
+    # model = LinearRegression()
+    # model.fit(X, y)
     
-    # Generate predictions
-    y_pred = model.predict(X)
-    plt.plot(score_data.index, y_pred, color='red', label='Regression Line')
-    plt.legend()
-    plt.show()
+    # # Generate predictions
+    # y_pred = model.predict(X)
+    # plt.plot(score_data.index, y_pred, color='red', label='Regression Line')
+    # plt.legend()
+    # plt.show()
 
-    # --------------------
+    # # --------------------
 
     plt.figure(figsize=(10, 5))
     plt.scatter(reward_data.index, reward_data.values, alpha=0.5)
@@ -108,15 +122,28 @@ def run_rl(env: TetrisGame, model_file = None, output_file = "ppo_tetris_custom_
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = "cpu"
 
+    N_ENVS = multiprocessing.cpu_count() // 2
+    # N_ENVS = 4
+    if N_ENVS > 1:
+        def make_env(rank: int):
+            def _init():
+                env = TetrisGame(seed=rank)
+                return Monitor(env, os.path.join(LOG_DIR, str(rank)), allow_early_resets=True)
+            return _init
+        env = SubprocVecEnv([make_env(rank=i) for i in range(N_ENVS)])
+        print(f"Using {N_ENVS} parallel environments for training.")
+    
     if model_file:
         model = PPO.load(model_file, env=env)
         print("Model loaded from file", model_file)
     else:
         policy_kwargs = dict(
-            net_arch=dict(pi=[512, 512], vf=[256, 256]),
+            net_arch=[64, 64],
             activation_fn=nn.ReLU
         )
-        model = PPO('MlpPolicy', env, policy_kwargs=policy_kwargs, ent_coef=ENTROPY, learning_rate=LEARNING_RATE, gamma=.995, verbose=1, device=device, n_steps=10240, batch_size=512)
+        model = PPO('MlpPolicy', env, policy_kwargs=policy_kwargs, ent_coef=ENTROPY, learning_rate=LEARNING_RATE, gamma=.99, verbose=1, device=device,      n_steps=2048, batch_size=128, n_epochs=10, clip_range=0.2, gae_lambda=0.95,
+        )
+    
     # tensorboard_log="./ppo_tetris_tensorboard/", if want logging
 
     print("Training Started")
@@ -300,8 +327,6 @@ if __name__ == "__main__":
         args = sys.argv[1:]
         # Train the model
         run_rl(env, model_file=(args[0] if len(args) >= 1 else None), output_file=(args[1] if len(args) >= 2 else "ppo_tetris_custom_net"))
-        # Close the environment
-        env.close()
     else:
         # PyGAD training with heuristics
         run_pygad()

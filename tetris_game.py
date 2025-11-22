@@ -198,6 +198,18 @@ def count_hole_score(board):
                 depth += 1
     return score / BOARD_HEIGHT
 
+def calc_max_height(board):
+    """Calculates the maximum height of the columns in the board."""
+    max_height = 0
+    for c in range(BOARD_WIDTH):
+        height = 0
+        for r in range(BOARD_HEIGHT):
+            if board[r][c] != EMPTY_CELL:
+                height = BOARD_HEIGHT - r
+                break
+        max_height = max(max_height, height)
+    return max_height
+
 def count_high_columns(board):
     """Counts the number of high columns in the board."""
     high_columns = 0
@@ -240,10 +252,12 @@ def count_uneven_height(board):
         diffs.append(abs(heights[c] - heights[c - 1]))
     
     diffs.sort()
-    uneven_height = 0
-    for i in range(len(diffs) - 2):
-        uneven_height += diffs[i]
-    return uneven_height
+    
+    # uneven_height = 0
+    # for i in range(len(diffs) - 2):
+    #     uneven_height += diffs[i]
+    # return uneven_height
+    return diffs[-3]
 
 class TetrisGame(gym.Env):
     def __init__(self, sid=0, seed=time.time(), weights=[1/4, 1/2, 1/2, 4, 1/4, 1, 1/10, 1, 1, 1]):
@@ -255,7 +269,7 @@ class TetrisGame(gym.Env):
         self.reset()
         if MODEL_TYPE == 'RL':
             # Heights, piece, extra 4
-            self.observation_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(15,), dtype=np.float32)
+            self.observation_space = gym.spaces.Box(low=0, high=BOARD_HEIGHT * BOARD_WIDTH, shape=(BOARD_WIDTH + len(PIECE_ORDER) + 4,), dtype=np.float32)
             # rotation, X position + 5 [-5, 4], slide pos + 2 [-2, 2], slide rotate
             self.action_space = gym.spaces.MultiDiscrete([4, 10])
 
@@ -266,6 +280,7 @@ class TetrisGame(gym.Env):
         height_obs = [0] * BOARD_WIDTH
         # One-hot encoding of piece type
         total_height = 0
+        max_height = 0
         for c in range(BOARD_WIDTH):
             height = 0
             for r in range(BOARD_HEIGHT):
@@ -274,9 +289,14 @@ class TetrisGame(gym.Env):
                     break
             height_obs[c] = height
             total_height += height
+            max_height = max(max_height, height)
 
         obs: list[float] = height_obs
-        obs.extend([piece, count_holes(self.board), count_high_column_score(self.board), count_uneven_height(self.board), total_height])
+        piece_one_hot = [0] * len(PIECE_ORDER)
+        if piece < len(PIECE_ORDER):
+            piece_one_hot[piece] = 1
+        obs.extend(piece_one_hot)
+        obs.extend([count_holes(self.board), count_uneven_height(self.board), total_height, max_height])
         return obs
     
     def reset(self, seed=None, options=None):
@@ -378,41 +398,29 @@ class TetrisGame(gym.Env):
 
     # Board heuristics can be added here
     def get_board_reward(self):
-        hole_reward = 0
-        density_reward = 0
-        high_col_reward = 0
-        uneven_height_reward = 0
+        reward = 0
 
         if MODEL_TYPE == 'HEURISTIC':
             # Negative reward for holes
-            hole_reward = -count_hole_score(self.board) * self.weights[0] - count_holes(self.board) * self.weights[1]
+            reward += -count_hole_score(self.board) * self.weights[0] - count_holes(self.board) * self.weights[1]
             # Negative reward for high columns
-            high_col_reward = -count_high_column_score(self.board) * self.weights[2]
+            reward += -count_high_column_score(self.board) * self.weights[2]
             # Negative reward for uneven heights
-            uneven_height_reward = -max(count_uneven_height(self.board) - self.weights[3], 0) * self.weights[4]
+            reward += -max(count_uneven_height(self.board) - self.weights[3], 0) * self.weights[4]
         else:
             # Negative reward for holes
-            hole_reward = -count_holes(self.board) / 2
+            reward += -count_holes(self.board) / 4
             # Negative reward for high columns
-            high_col_reward = -count_high_column_score(self.board)
+            reward += -count_high_column_score(self.board) / 2
             # Negative reward for uneven heights
-            uneven_height_reward = -max(count_uneven_height(self.board) - 8, 0) / 4
-
-        reward = hole_reward + high_col_reward + uneven_height_reward
+            reward += -max(count_uneven_height(self.board) - 10, 0) / 10
+        
         # reward = 0
         # reward = hole_reward
 
         # print(f"Board Reward: {reward:.2f} (hole: {hole_reward:.2f}, density: {density_reward:.2f}, high_col: {high_col_reward:.2f}, uneven_height: {uneven_height_reward:.2f})") # Debugging
 
-        if MODEL_TYPE == 'HEURISTIC':
-            return reward
-        
-        delta_reward = reward - self.prev_board_reward
-        self.prev_board_reward = reward
-        if delta_reward > 0:
-            delta_reward /= 2
-
-        return delta_reward
+        return reward
 
     # Function that the model calls to train
     def step(self, action, callback=None):
@@ -420,13 +428,13 @@ class TetrisGame(gym.Env):
 
         old_score = self.score
         old_lines = self.lines_cleared
+        old_holes = count_holes(self.board)
+        old_max_height = calc_max_height(self.board)
 
         rot = action[0]
         x_pos = action[1] - 5
         # slide_x = action[2] - 2
         # slide_rot = action[3]
-
-        drop_count = 0
 
         if self.do_action('move_down'):
             # Initial rotation and moving
@@ -465,27 +473,49 @@ class TetrisGame(gym.Env):
 
                 #     if not success or frozen:
                 #         break
+        else:
+            assert(False), "Failed to move down at start of step!"
+        
+        # if MODEL_TYPE == 'RL':
+        #     if self.is_game_over:
+        #         reward = -10000
+        #     elif self.pieces >= 1000:
+        #         reward = 0
+        #     else:
+        #         return self._get_obs(), 0, False, False, self._get_info()
+        #     reward += self.lines_cleared * 100
+        #     return self._get_obs(), reward, self.is_game_over, False, self._get_info()
+            
 
         if self.is_game_over:
             if MODEL_TYPE == 'RL':
-                reward = -20
+                reward = -10000
             else:
                 reward = -10 * self.weights[5] # Large negative reward for game over
+        
+        if MODEL_TYPE == 'HEURISTIC':
+            reward += min((self.score - old_score) * self.weights[6] / 100, self.weights[7] * 10)  # Reward for score increase
+            reward += (self.lines_cleared - old_lines) ** 2 * self.weights[8] # Reward for lines cleared
+            reward += 1 # Small reward for each tick survived
+            reward += self.get_board_reward() * self.weights[9] # Add board heuristics
         else:
-            if MODEL_TYPE == 'HEURISTIC':
-                reward += min((self.score - old_score) * self.weights[6] / 100, self.weights[7] * 10)  # Reward for score increase
-                reward += (self.lines_cleared - old_lines) ** 2 * self.weights[8] # Reward for lines cleared
-                reward += 1 # Small reward for each tick survived
-                reward += self.get_board_reward() * self.weights[9] # Add board heuristics
-            else:
-                # reward += max(self.score - max(300, old_score), 0) / 1000  # Reward for score increase
-                reward += (self.lines_cleared - old_lines) * 10 # Reward for lines cleared
-                reward += 1 # Small reward for each tick survived
-                reward += self.get_board_reward() # Add board heuristics
-                if (self.pieces * 4 >= BOARD_HEIGHT * BOARD_WIDTH / 2):
-                    reward += 1
-                if (self.pieces * 4 >= BOARD_HEIGHT * BOARD_WIDTH):
-                    reward += 2 # Extra reward for placing pieces after filling board
+            # reward += max(self.score - max(300, old_score), 0) / 1000  # Reward for score increase
+            # reward += (self.lines_cleared - old_lines) * 50 # Reward for lines cleared
+
+            lines_cleared = self.lines_cleared - old_lines
+            if lines_cleared == 1: reward += 100
+            elif lines_cleared == 2: reward += 300
+            elif lines_cleared == 3: reward += 900
+            elif lines_cleared == 4: reward += 3000
+
+            # reward += 1 # Small reward for each tick survived
+            reward -= max(0, count_holes(self.board) - old_holes) * 10 # Negative reward for new holes
+            reward -= max(0, calc_max_height(self.board) - old_max_height) * 5 # Negative reward for increased max height
+            # reward += self.get_board_reward() # Add board heuristics
+            # if (self.pieces * 4 >= BOARD_HEIGHT * BOARD_WIDTH / 2):
+            #     reward += 1
+            # if (self.pieces * 4 >= BOARD_HEIGHT * BOARD_WIDTH):
+            #     reward += 2 # Extra reward for placing pieces after filling board
         self.total_reward += reward
 
         if callback:
@@ -623,7 +653,7 @@ def simulate(env: TetrisGame, model_file = None):
 if __name__ == '__main__':
     args = sys.argv[1:]
 
-    env = TetrisGame(model_file=args[1] if len(args) > 1 else None)
+    env = TetrisGame()
 
     simulate(env, args[1] if len(args) > 1 else None)
     env.close()
