@@ -24,7 +24,7 @@ LOG_DIR = "./logs/"
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # RL Hyperparamaters
-TRAIN_STEPS = 10000000
+TRAIN_STEPS = 2000000
 ENTROPY = .05
 LEARNING_RATE = 2e-4
 PLOT_POINTS = 1000  # Number of points to plot in the history

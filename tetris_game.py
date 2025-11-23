@@ -247,17 +247,10 @@ def count_uneven_height(board):
                 break
         heights[c] = height
     
-    diffs = []
-    for c in range(1, BOARD_WIDTH):
-        diffs.append(abs(heights[c] - heights[c - 1]))
-    
-    diffs.sort()
-    
-    # uneven_height = 0
-    # for i in range(len(diffs) - 2):
-    #     uneven_height += diffs[i]
-    # return uneven_height
-    return diffs[-3]
+    uneven_height = 0
+    for i in range(1, BOARD_WIDTH):
+        uneven_height += heights[i]
+    return uneven_height
 
 class TetrisGame(gym.Env):
     def __init__(self, sid=0, seed=time.time(), weights=[1/4, 1/2, 1/2, 4, 1/4, 1, 1/10, 1, 1, 1]):
@@ -509,7 +502,7 @@ class TetrisGame(gym.Env):
             elif lines_cleared == 4: reward += 3000
 
             # reward += 1 # Small reward for each tick survived
-            reward -= max(0, count_holes(self.board) - old_holes) * 10 # Negative reward for new holes
+            reward -= max(0, count_holes(self.board) - old_holes) * 30 # Negative reward for new holes
             reward -= max(0, calc_max_height(self.board) - old_max_height) * 5 # Negative reward for increased max height
             # reward += self.get_board_reward() # Add board heuristics
             # if (self.pieces * 4 >= BOARD_HEIGHT * BOARD_WIDTH / 2):
@@ -647,7 +640,9 @@ def simulate(env: TetrisGame, model_file = None):
             print("Game Over or Truncated!")
             break
         env.print()
-        print(f"Reward: {reward} (board: {env.prev_board_reward})")
+        print(f"Reward: {reward}")
+        print(f"Obs: {obs}")
+        print(f"Board: {env.prev_board_reward}")
 
 # --- Main Execution ---
 if __name__ == '__main__':
